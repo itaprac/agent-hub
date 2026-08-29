@@ -62,6 +62,11 @@ case "$1" in
             printf '%s\n' "$AGENT_HUB_TEST_LAUNCHCTL_BOOTSTRAP_ERROR" >&2
             exit 2
         fi
+        if [ -n "${AGENT_HUB_TEST_SERVICE_STDERR:-}" ]; then
+            mkdir -p "$HOME/Library/Logs"
+            printf '%s\n' "$AGENT_HUB_TEST_SERVICE_STDERR" \
+                >> "$HOME/Library/Logs/agent-hub-web.error.log"
+        fi
         : > "$state"
         ;;
     print) test -f "$state" ;;
@@ -317,6 +322,93 @@ def test_macos_setup_reports_launchctl_bootstrap_failure(
     assert result.returncode == 1
     assert error in result.stderr
     assert "[ok]" not in result.stdout
+
+
+TCC_DENIAL_TRACEBACK = (
+    "Traceback (most recent call last):\n"
+    '  File "/Users/x/app/agenthub/webapp.py", line 10, in main\n'
+    "PermissionError: [Errno 1] Operation not permitted: "
+    "'/Users/x/Documents/dev/agent-hub-content/config/hub.toml'"
+)
+
+
+def test_macos_setup_names_the_missing_grant_when_the_service_is_denied_file_access(
+    tmp_path: Path, content: Path
+) -> None:
+    result = run_setup(
+        tmp_path,
+        "--content",
+        str(content),
+        "--machine",
+        "testmachine",
+        "--non-interactive",
+        extra_env={
+            "AGENT_HUB_TEST_UNAME": "Darwin",
+            "AGENT_HUB_TEST_WEB_FAIL": "1",
+            "AGENT_HUB_TEST_SERVICE_STDERR": TCC_DENIAL_TRACEBACK,
+        },
+    )
+
+    assert result.returncode == 1
+    interpreter = (tmp_path / "app" / ".venv" / "bin" / "python").resolve()
+    assert "did not return HTTP 200" in result.stderr
+    assert "Full Disk Access" in result.stderr
+    assert str(interpreter) in result.stderr
+    assert "launchctl kickstart -k gui/" in result.stderr
+    assert "Homebrew" in result.stderr
+    assert "Web UI returned HTTP 200" not in result.stdout
+
+
+def test_macos_setup_does_not_treat_other_permission_errors_as_a_missing_grant(
+    tmp_path: Path, content: Path
+) -> None:
+    result = run_setup(
+        tmp_path,
+        "--content",
+        str(content),
+        "--machine",
+        "testmachine",
+        "--non-interactive",
+        extra_env={
+            "AGENT_HUB_TEST_UNAME": "Darwin",
+            "AGENT_HUB_TEST_WEB_FAIL": "1",
+            "AGENT_HUB_TEST_SERVICE_STDERR": (
+                "PermissionError: [Errno 13] Permission denied: '/tmp/locked'"
+            ),
+        },
+    )
+
+    assert result.returncode == 1
+    assert "did not return HTTP 200" in result.stderr
+    assert "Full Disk Access" not in result.stderr
+
+
+def test_macos_setup_ignores_service_log_content_from_before_the_reload(
+    tmp_path: Path, content: Path
+) -> None:
+    logs = tmp_path / "home" / "Library" / "Logs"
+    logs.mkdir(parents=True)
+    (logs / "agent-hub-web.error.log").write_text(
+        f"{TCC_DENIAL_TRACEBACK}\n", encoding="utf-8"
+    )
+
+    result = run_setup(
+        tmp_path,
+        "--content",
+        str(content),
+        "--machine",
+        "testmachine",
+        "--non-interactive",
+        extra_env={
+            "AGENT_HUB_TEST_UNAME": "Darwin",
+            "AGENT_HUB_TEST_WEB_FAIL": "1",
+        },
+    )
+
+    assert result.returncode == 1
+    assert "did not return HTTP 200" in result.stderr
+    assert "Full Disk Access" not in result.stderr
+    assert "PermissionError" not in result.stderr
 
 
 def test_macos_setup_rerun_refreshes_only_the_app_and_service(
