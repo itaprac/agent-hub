@@ -27,6 +27,7 @@ from .config import SAFE_NAME, short_hostname
 SERVICE_LABEL = "com.agenthub.web"
 SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 7337
+FILE_ACCESS_DENIAL_MARKER = "PermissionError: [Errno 1] Operation not permitted"
 
 
 class SetupError(RuntimeError):
@@ -507,10 +508,41 @@ def probe_http(url: str) -> bool:
         return False
 
 
+def read_log_after_offset(path: Path, offset: int) -> str:
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(offset)
+            return handle.read()
+    except OSError:
+        return ""
+
+
+def build_service_start_error(
+    url: str, error_log: Path, log_offset: int, web: Path
+) -> SetupError:
+    fresh_log = read_log_after_offset(error_log, log_offset)
+    message = f"reloaded service did not return HTTP 200 at {url}"
+    if FILE_ACCESS_DENIAL_MARKER in fresh_log:
+        interpreter = (web.parent / "python").resolve()
+        return SetupError(
+            f"{message}\n"
+            f"The service log shows a macOS file-access denial ({error_log}).\n"
+            "macOS records the grant against the resolved interpreter path.\n"
+            "A Homebrew Python upgrade changes that path and revokes the grant.\n"
+            "Grant access again:\n"
+            "  1. Open System Settings > Privacy & Security > Full Disk Access.\n"
+            f"  2. Add this binary (press Cmd+Shift+G in the file picker): {interpreter}\n"
+            f"  3. Run: launchctl kickstart -k gui/{os.getuid()}/{SERVICE_LABEL}\n"
+            "See docs/macos-permissions.md in the App repository."
+        )
+    return SetupError(message)
+
+
 def install_macos_service(home: Path, app_root: Path, web: Path) -> Path:
     plist_path = home / "Library" / "LaunchAgents" / f"{SERVICE_LABEL}.plist"
     log_dir = home / "Library" / "Logs"
     log_dir.mkdir(parents=True, exist_ok=True)
+    error_log = log_dir / "agent-hub-web.error.log"
     service = {
         "Label": SERVICE_LABEL,
         "ProgramArguments": [
@@ -529,7 +561,7 @@ def install_macos_service(home: Path, app_root: Path, web: Path) -> Path:
             "AGENT_HUB_REPO": "",
         },
         "StandardOutPath": str(log_dir / "agent-hub-web.log"),
-        "StandardErrorPath": str(log_dir / "agent-hub-web.error.log"),
+        "StandardErrorPath": str(error_log),
     }
     atomic_write(plist_path, plistlib.dumps(service).decode("utf-8"))
     domain = f"gui/{os.getuid()}"
@@ -539,6 +571,7 @@ def install_macos_service(home: Path, app_root: Path, web: Path) -> Path:
         capture_output=True,
         check=False,
     )
+    log_offset = error_log.stat().st_size if error_log.exists() else 0
     loaded = subprocess.run(
         ["launchctl", "bootstrap", domain, str(plist_path)],
         text=True,
@@ -552,7 +585,7 @@ def install_macos_service(home: Path, app_root: Path, web: Path) -> Path:
         if probe_http(url):
             return plist_path
         time.sleep(0.1)
-    raise SetupError(f"reloaded service did not return HTTP 200 at {url}")
+    raise build_service_start_error(url, error_log, log_offset, web)
 
 
 def uninstall_macos_service(home: Path) -> Path:

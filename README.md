@@ -31,7 +31,7 @@ Setup registers this Machine, installs the App into `.venv`, links a Content rep
 ./setup.sh --new-content ../agent-hub-content --machine workstation --non-interactive
 ```
 
-On macOS, setup installs the `com.agenthub.web` user service on `127.0.0.1:7337`; on Linux, it prints the foreground Web command.
+On macOS, setup installs the `com.agenthub.web` user service on `127.0.0.1:7337`; on Linux, it prints the foreground Web command. If the service stops after a Homebrew Python upgrade, see `docs/macos-permissions.md`.
 
 | Command | Effect |
 |---|---|
