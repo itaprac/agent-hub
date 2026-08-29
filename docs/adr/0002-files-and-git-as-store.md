@@ -1,0 +1,3 @@
+# Files and Git are the only store; no database
+
+All configuration and content (skills, instructions, fleet config) live as plain files in the content repo, with Git as the database. Usage analytics scans transcript files directly and keeps only an in-process cache (per-file memo plus a TTL snapshot of the aggregated result); the cache is disposable and is rebuilt from the files at any time. We considered a SQLite index (stdlib, rebuildable) for usage aggregates and rejected it: at the current scale a cold scan takes under one second, so the index would only speed up the first request after a restart. Any future database may be a rebuildable cache only, never a source of truth.

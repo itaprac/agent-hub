@@ -1,0 +1,14 @@
+# Agent adapters define where agent-hub installs Skills and Instructions.
+[claude]
+skills_global = "~/.claude/skills/{name}"
+skills_project = "{project_root}/.claude/skills/{name}"
+instructions_global = "~/.claude/CLAUDE.md"
+instructions_project = "{project_root}/CLAUDE.md"
+mode = "symlink"
+
+[codex]
+skills_global = "~/.codex/skills/{name}"
+skills_project = "{project_root}/.agents/skills/{name}"
+instructions_global = "~/.codex/AGENTS.md"
+instructions_project = "{project_root}/AGENTS.md"
+mode = "symlink"

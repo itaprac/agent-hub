@@ -1,0 +1,4 @@
+# Add one table per project. Map Machine IDs to local project paths.
+#
+# [example-project]
+# my-machine = "~/Documents/dev/example-project"

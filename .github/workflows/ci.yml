@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the project
+        run: python3 -m pip install -e ".[dev]"
+
+      - name: Check syntax
+        run: |
+          python3 -m py_compile hub.py usage.py web.py agenthub/*.py
+          bash -n setup.sh tests/*.sh
+          if [ -d deploy ]; then bash -n deploy/*.sh; fi
+          for file in web/js/*.js; do node --check "$file"; done
+
+      - name: Test package
+        run: python3 -m pytest
+
+      - name: Test frontend state and colour schemes
+        run: |
+          node tests/web_state.mjs
+          node tests/web_theme.mjs
+
+      - name: Test CLI
+        run: ./tests/smoke.sh
+
+      - name: Test Web API
+        run: ./tests/web_smoke.sh
+
+      - name: Test federation
+        run: ./tests/smoke-peers.sh
