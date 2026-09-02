@@ -35,16 +35,17 @@ class LocalMachine:
         assert fetch is True
         return git_payload()
 
-    def status(self, projection: object) -> dict[str, Any]:
+    def machine_id(self) -> str:
+        return "testmachine"
+
+    def status(self) -> dict[str, Any]:
         return {"exit_code": 0, "problems": 0, "lines": []}
 
     def usage(self, *, days: int, time_zone: str | None) -> dict[str, Any]:
         assert self.usage_result is not None
         return self.usage_result
 
-    def run(
-        self, projection: object, *, command: str, dry_run: bool
-    ) -> dict[str, Any]:
+    def run(self, *, command: str, dry_run: bool) -> dict[str, Any]:
         self.runs.append((command, dry_run))
         return {"exit_code": 0, "lines": [{"level": "ok", "text": command}]}
 

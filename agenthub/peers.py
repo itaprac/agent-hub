@@ -128,13 +128,14 @@ class HttpPeerTransport:
 class _LocalMachine(Protocol):
     def git(self, *, fetch: bool) -> dict[str, Any]: ...
 
-    def status(self, projection: hub_config.MachineProjection) -> dict[str, Any]: ...
+    def machine_id(self) -> str: ...
+
+    def status(self) -> dict[str, Any]: ...
 
     def usage(self, *, days: int, time_zone: str | None) -> dict[str, Any]: ...
 
     def run(
         self,
-        projection: hub_config.MachineProjection,
         *,
         command: str,
         dry_run: bool,
@@ -152,8 +153,7 @@ class PeerFederation:
         self._transport = transport
 
     def state(self) -> dict[str, Any]:
-        projection = self._projection()
-        machine_id = projection.machine_id
+        machine_id = self._local.machine_id()
         config = _load_config(self._repo)
         configured = config.enabled_peers(machine_id)
         local = {
@@ -162,7 +162,7 @@ class PeerFederation:
             "online": True,
             "url": None,
             "git": self._local.git(fetch=True),
-            "status": _status_summary(self._local.status(projection)),
+            "status": _status_summary(self._local.status()),
         }
         remote_peers = [
             peer
@@ -189,7 +189,7 @@ class PeerFederation:
         self, *, days: int, time_zone: str | None, local_only: bool
     ) -> dict[str, Any]:
         try:
-            machine_id = hub_config.load_machine_projection(self._repo).machine_id
+            machine_id = self._local.machine_id()
         except hub_config.ConfigError:
             machine_id = os.uname().nodename
         local = usage.attach_machine(
@@ -219,13 +219,11 @@ class PeerFederation:
     def run(
         self, machine: str, *, command: str, dry_run: bool
     ) -> dict[str, Any]:
-        projection = self._projection()
+        machine_id = self._local.machine_id()
         config = _load_config(self._repo)
-        if machine == projection.machine_id:
-            return self._local.run(
-                projection, command=command, dry_run=dry_run
-            )
-        configured = config.enabled_peers(projection.machine_id)
+        if machine == machine_id:
+            return self._local.run(command=command, dry_run=dry_run)
+        configured = config.enabled_peers(machine_id)
         if machine not in configured:
             raise PeerError(404, f"unknown machine: {machine}")
         response = self._transport.request(
@@ -306,15 +304,6 @@ class PeerFederation:
         if not isinstance(payload, dict) or "buckets" not in payload:
             return usage.peer_failure(peer.machine, "unexpected usage response")
         return usage.attach_machine(payload, peer.machine)
-
-    def _projection(self) -> hub_config.MachineProjection:
-        try:
-            return hub_config.load_machine_projection(self._repo)
-        except hub_config.ConfigError as exc:
-            raise PeerError(500, str(exc)) from exc
-        except (OSError, UnicodeError) as exc:
-            raise PeerError(500, str(exc)) from exc
-
 
 def _load_token() -> str:
     environment_token = os.environ.get(PEER_TOKEN_ENV, "").strip()

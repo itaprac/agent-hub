@@ -8,7 +8,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from . import fileio, repository
+from . import fileio
 
 TEXT_SUFFIXES = frozenset({".md", ".toml", ".txt", ".sh", ".py", ".json", ".yaml", ".yml"})
 MAX_FILE_BYTES = 1024 * 1024
@@ -154,10 +154,9 @@ def write(
     if len(encoded) > MAX_FILE_BYTES:
         raise FileError(413, f"content is larger than {MAX_FILE_BYTES} bytes: {len(encoded)}")
     try:
-        with repository.mutation():
-            exists, mode = _matching_revision(path, revision)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fileio.atomic_write(path, encoded, mode)
+        exists, mode = _matching_revision(path, revision)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fileio.atomic_write(path, encoded, mode)
     except OSError as exc:
         raise FileError(500, f"cannot write file: {exc}") from exc
     return {
@@ -172,13 +171,12 @@ def delete(repo: Path, requested_path: Any, revision: str | None) -> dict[str, A
     """Delete one editable file if its revision still matches."""
     path = resolve(repo, requested_path)
     try:
-        with repository.mutation():
-            if path.is_dir() and not path.is_symlink():
-                raise FileError(400, f"refusing to delete a directory: {relative(path, repo)}")
-            if not path.exists() and not path.is_symlink():
-                raise FileError(404, f"file not found: {relative(path, repo)}")
-            _matching_revision(path, revision)
-            path.unlink()
+        if path.is_dir() and not path.is_symlink():
+            raise FileError(400, f"refusing to delete a directory: {relative(path, repo)}")
+        if not path.exists() and not path.is_symlink():
+            raise FileError(404, f"file not found: {relative(path, repo)}")
+        _matching_revision(path, revision)
+        path.unlink()
     except OSError as exc:
         raise FileError(500, f"cannot delete file: {exc}") from exc
     return {"path": relative(path, repo), "deleted": True}

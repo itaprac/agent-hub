@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agenthub import config, core
+from agenthub import operations
 
 from test_cli_status import module
 
@@ -12,9 +12,7 @@ from test_cli_status import module
 def test_dry_run_output_matches_the_structured_report(content: Path, home: Path) -> None:
     expected = [
         f"[{check.level}] {check.text}" if check.level else check.text
-        for check in core.sync_report(
-            config.load_machine_projection(content), dry_run=True
-        ).checks
+        for check in operations.ContentOperations(content).sync(dry_run=True).checks
     ]
     result = module(home, "--repo", str(content), "--dry-run", "sync")
     assert result.returncode == 0

@@ -4,28 +4,23 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import dataclasses
 import json
 import re
 import sys
 import traceback
 import urllib.parse
-from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 from . import config as hub_config
-from . import core as hub_core
 from . import files as content_files
 from . import gitio
+from . import operations
 from . import peers
-from . import repository
 from . import usage
 
-TEXT_SUFFIXES = content_files.TEXT_SUFFIXES
-MAX_FILE_BYTES = content_files.MAX_FILE_BYTES
 MAX_BODY_BYTES = content_files.MAX_FILE_BYTES + 64 * 1024
 RUN_COMMANDS = frozenset({"apply", "sync"})
 
@@ -56,143 +51,17 @@ class ApiError(Exception):
         self.message = message
 
 
-@contextlib.contextmanager
-def repository_operation() -> Iterator[None]:
-    """Map package-level repository contention to the HTTP error contract."""
-    try:
-        with repository.mutation():
-            yield
-    except repository.RepositoryBusyError as exc:
-        raise ApiError(423, str(exc)) from exc
-
-
 # --------------------------------------------------------------------------- hub
 
-def require_projection(repo: Path) -> hub_config.MachineProjection:
-    try:
-        return hub_config.load_machine_projection(repo)
-    except hub_config.ConfigError as exc:
-        raise ApiError(500, str(exc)) from exc
-    except (OSError, UnicodeError) as exc:
-        raise ApiError(500, str(exc)) from exc
-
-
-def status_result(
-    repo: Path, projection: hub_config.MachineProjection | None = None
-) -> dict[str, Any]:
-    """Report status from the shared package instead of parsing CLI output."""
-    try:
-        with repository_operation():
-            report = hub_core.status_report(
-                projection
-                if projection is not None
-                else hub_config.load_machine_projection(repo)
-            )
-    except hub_config.ConfigError as exc:
-        # The dashboard shows this inline, exactly as the parsed CLI error did.
-        report = hub_core.config_error_report(repo, str(exc))
-    except (OSError, UnicodeError) as exc:
-        raise ApiError(500, str(exc)) from exc
-    return report.to_dict()
-
-
-def apply_result(
-    repo: Path,
-    dry_run: bool,
-    projection: hub_config.MachineProjection | None = None,
-) -> dict[str, Any]:
-    """Apply from the shared package instead of parsing CLI output."""
-    try:
-        with repository_operation():
-            report = hub_core.apply_report(
-                projection
-                if projection is not None
-                else hub_config.load_machine_projection(repo),
-                dry_run=dry_run,
-            )
-    except hub_config.ConfigError as exc:
-        # The CLI reports an unreadable fleet configuration with one error, exit 2.
-        report = hub_core.apply_error_report(
-            repo, str(exc), kind="config", exit_code=2, dry_run=dry_run
-        )
-    except (OSError, UnicodeError) as exc:
-        # Keep filesystem failures in the command report instead of returning 500.
-        report = hub_core.apply_error_report(
-            repo, str(exc), kind="error", exit_code=1, dry_run=dry_run
-        )
-    return report.to_dict()
-
-
-def sync_result(
-    repo: Path,
-    dry_run: bool,
-    projection: hub_config.MachineProjection | None = None,
-) -> dict[str, Any]:
-    """Sync from the shared package instead of parsing CLI output."""
-    try:
-        with repository_operation():
-            report = hub_core.sync_report(
-                projection
-                if projection is not None
-                else hub_config.load_machine_projection(repo),
-                dry_run=dry_run,
-            )
-    except hub_config.ConfigError as exc:
-        # The CLI reports an unreadable fleet configuration with one error, exit 2.
-        report = hub_core.sync_error_report(
-            repo, str(exc), kind="config", exit_code=2, dry_run=dry_run
-        )
-    except (OSError, UnicodeError) as exc:
-        # Keep filesystem failures in the command report instead of returning 500.
-        report = hub_core.sync_error_report(
-            repo, str(exc), kind="error", exit_code=1, dry_run=dry_run
-        )
-    return report.to_dict()
-
-
-def add_skill_result(repo: Path, name: str, project: str | None) -> dict[str, Any]:
-    """Create a skill through the shared package instead of parsing CLI output."""
-    try:
-        with repository_operation():
-            report = hub_core.add_skill_report(
-                hub_config.load_machine_projection(repo), name, project
-            )
-    except hub_config.ConfigError as exc:
-        # The CLI reports an unreadable fleet configuration with one error, exit 2.
-        report = hub_core.add_skill_error_report(repo, str(exc), kind="config", exit_code=2)
-    except (OSError, UnicodeError) as exc:
-        report = hub_core.add_skill_error_report(repo, str(exc), kind="error", exit_code=1)
-    return report.to_dict()
-
-
-def adopt_result(
-    repo: Path, path: str, project: str | None, name: str | None
-) -> dict[str, Any]:
-    """Adopt a skill through the shared package instead of parsing CLI output."""
-    try:
-        with repository_operation():
-            report = hub_core.adopt_skill_report(
-                hub_config.load_machine_projection(repo), path, project, name
-            )
-    except hub_config.ConfigError as exc:
-        # The CLI reports an unreadable fleet configuration with one error, exit 2.
-        report = hub_core.adopt_error_report(repo, str(exc), kind="config", exit_code=2)
-    except (OSError, UnicodeError) as exc:
-        report = hub_core.adopt_error_report(repo, str(exc), kind="error", exit_code=1)
-    return report.to_dict()
-
-
 def run_command(
-    repo: Path,
+    content_operations: operations.ContentOperations,
     command: str,
     dry_run: bool,
-    projection: hub_config.MachineProjection | None = None,
 ) -> dict[str, Any]:
-    """Run one operator command through the shared package."""
     if command == "apply":
-        return apply_result(repo, dry_run, projection)
+        return content_operations.apply(dry_run=dry_run).to_dict()
     if command == "sync":
-        return sync_result(repo, dry_run, projection)
+        return content_operations.sync(dry_run=dry_run).to_dict()
     raise ApiError(400, f"unknown command: {command}")
 
 
@@ -201,26 +70,27 @@ class _WebLocalMachine:
 
     def __init__(self, repo: Path) -> None:
         self._repo = repo
+        self._content_operations = operations.ContentOperations(repo)
 
     def git(self, *, fetch: bool) -> dict[str, Any]:
         return git_state(self._repo, fetch=fetch)
 
-    def status(
-        self, projection: hub_config.MachineProjection
-    ) -> dict[str, Any]:
-        return status_result(self._repo, projection)
+    def status(self) -> dict[str, Any]:
+        return self._content_operations.status().to_dict()
+
+    def machine_id(self) -> str:
+        return self._content_operations.machine_id()
 
     def usage(self, *, days: int, time_zone: str | None) -> dict[str, Any]:
         return usage.read_summary(days=days, time_zone=time_zone)
 
     def run(
         self,
-        projection: hub_config.MachineProjection,
         *,
         command: str,
         dry_run: bool,
     ) -> dict[str, Any]:
-        return run_command(self._repo, command, dry_run, projection)
+        return run_command(self._content_operations, command, dry_run)
 
 
 # --------------------------------------------------------------------------- peers/git
@@ -236,146 +106,9 @@ def git_state(repo: Path, fetch: bool = True) -> dict[str, Any]:
         raise ApiError(500, str(exc)) from exc
 
 
-# --------------------------------------------------------------------------- state
-
-def repo_relative(path: Path, repo: Path) -> str:
-    try:
-        return str(path.relative_to(repo))
-    except ValueError:
-        return str(path)
-
-
-def list_skills(parent: Path, repo: Path) -> list[dict[str, Any]]:
-    skills = []
-    # The package owns the canonical skill directory rule (CONTEXT.md).
-    for child in hub_config.skill_directories(parent):
-        files = []
-        for path in sorted(child.rglob("*"), key=lambda item: str(item).lower()):
-            if not path.is_file() or any(
-                part.startswith(".") for part in path.relative_to(child).parts
-            ):
-                continue
-            files.append(
-                {
-                    "name": str(path.relative_to(child)),
-                    "path": repo_relative(path, repo),
-                    "size": path.stat().st_size,
-                    "editable": path.suffix.lower() in TEXT_SUFFIXES,
-                }
-            )
-        skills.append({"name": child.name, "path": repo_relative(child, repo), "files": files})
-    return skills
-
-
-def list_instructions(directory: Path, repo: Path, agents: list[str]) -> list[dict[str, Any]]:
-    names = ["base.md"] + [f"{agent}.md" for agent in agents]
-    if directory.is_dir():
-        for path in sorted(directory.glob("*.md"), key=lambda item: item.name.lower()):
-            if path.name not in names:
-                names.append(path.name)
-    entries = []
-    for name in names:
-        path = directory / name
-        stem = name[:-3]
-        kind = "base" if name == "base.md" else ("agent" if stem in agents else "extra")
-        entries.append(
-            {
-                "name": name,
-                "path": repo_relative(path, repo),
-                "exists": path.is_file(),
-                "kind": kind,
-            }
-        )
-    return entries
-
-
-def build_state(repo: Path) -> dict[str, Any]:
-    projection = require_projection(repo)
-    repo = projection.repo
-    machine_id = projection.machine_id
-
-    agents = [
-        {
-            "name": agent.name,
-            "mode": agent.mode,
-            "keys": dict(agent.target_templates),
-        }
-        for agent in projection.agents
-    ]
-
-    projects = [
-        {
-            "name": project.name,
-            "path": str(project.path) if project.path is not None else None,
-            "machines": dict(project.machines),
-            "available": project.available,
-            "note": (
-                ""
-                if project.available
-                else project.reason
-                if project.availability == "no_path"
-                else "path does not exist on this machine"
-            ),
-        }
-        for project in projection.projects
-    ]
-
-    skills_root = repo / "skills"
-    instructions_root = repo / "instructions"
-    project_names = [project["name"] for project in projects]
-
-    # Only agents that declare an instructions target can use an overlay file.
-    global_agents = [agent.name for agent in projection.agents if agent.instructions_global]
-    project_agents = [agent.name for agent in projection.agents if agent.instructions_project]
-
-    config_dir = repo / "config"
-    known_configs = ["hub.toml", "agents.toml", "projects.toml", "skills.toml"]
-    if config_dir.is_dir():
-        for path in sorted(config_dir.glob("*.toml"), key=lambda item: item.name.lower()):
-            if path.name not in known_configs:
-                known_configs.append(path.name)
-
-    return {
-        "machine_id": machine_id,
-        "hostname": projection.hostname,
-        "repo": str(repo),
-        "agents": agents,
-        "projects": projects,
-        "skills": {
-            "global": list_skills(skills_root / "global", repo),
-            "projects": {
-                name: list_skills(skills_root / "projects" / name, repo) for name in project_names
-            },
-        },
-        "instructions": {
-            "global": list_instructions(instructions_root / "global", repo, global_agents),
-            "projects": {
-                name: list_instructions(instructions_root / "projects" / name, repo, project_agents)
-                for name in project_names
-            },
-        },
-        "config_files": [
-            {
-                "name": name,
-                "path": repo_relative(config_dir / name, repo),
-                "exists": (config_dir / name).is_file(),
-            }
-            for name in known_configs
-        ],
-        "text_suffixes": sorted(TEXT_SUFFIXES),
-        "max_file_bytes": MAX_FILE_BYTES,
-    }
-
-
 # --------------------------------------------------------------------------- files
 
-resolve_repo_file = content_files.resolve
-read_repo_file = content_files.read
 expected_revision = content_files.expected_revision
-
-
-write_repo_file = content_files.write
-delete_repo_file = content_files.delete
 
 
 def optional_name(payload: dict[str, Any], key: str) -> str | None:
@@ -543,7 +276,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error_json(exc.status, exc.message)
         except content_files.FileError as exc:
             self.send_error_json(exc.status, exc.message)
-        except repository.RepositoryBusyError as exc:
+        except (hub_config.ConfigError, OSError, UnicodeError) as exc:
+            self.send_error_json(500, str(exc))
+        except operations.RepositoryBusyError as exc:
             self.send_error_json(423, str(exc))
         except BrokenPipeError:
             raise
@@ -593,7 +328,7 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(404, f"unknown endpoint: {path}")
 
     def get_state(self, _match: re.Match[str]) -> None:
-        self.send_json(build_state(self.repo))
+        self.send_json(operations.ContentOperations(self.repo).state())
 
     def get_git(self, _match: re.Match[str]) -> None:
         fetch = (self.query().get("fetch") or ["1"])[0] != "0"
@@ -603,7 +338,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(self.peer_federation().state())
 
     def get_status(self, _match: re.Match[str]) -> None:
-        self.send_json(status_result(self.repo))
+        self.send_json(operations.ContentOperations(self.repo).status().to_dict())
 
     def get_usage(self, _match: re.Match[str]) -> None:
         query = self.query()
@@ -640,7 +375,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def get_file(self, _match: re.Match[str]) -> None:
         values = self.query().get("path") or []
-        file = read_repo_file(self.repo, values[0] if values else None)
+        file = operations.ContentOperations(self.repo).read_file(
+            values[0] if values else None
+        )
         self.send_json(file, headers={"ETag": f'"{file["revision"]}"'})
 
     def _command_payload(self) -> tuple[str, bool]:
@@ -652,7 +389,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_run(self, _match: re.Match[str]) -> None:
         command, dry_run = self._command_payload()
-        self.send_json(run_command(self.repo, command, dry_run))
+        self.send_json(
+            run_command(operations.ContentOperations(self.repo), command, dry_run)
+        )
 
     def post_peer_run(self, match: re.Match[str]) -> None:
         machine = match.group("machine")
@@ -665,27 +404,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_add_skill(self, _match: re.Match[str]) -> None:
         payload = self.read_json()
-        self.send_json(
-            add_skill_result(
-                self.repo, required_name(payload, "name"), optional_name(payload, "project")
-            )
+        report = operations.ContentOperations(self.repo).add_skill(
+            required_name(payload, "name"), optional_name(payload, "project")
         )
+        self.send_json(report.to_dict())
 
     def post_adopt(self, _match: re.Match[str]) -> None:
         payload = self.read_json()
-        self.send_json(
-            adopt_result(
-                self.repo,
-                required_name(payload, "path"),
-                optional_name(payload, "project"),
-                optional_name(payload, "name"),
-            )
+        report = operations.ContentOperations(self.repo).adopt(
+            required_name(payload, "path"),
+            optional_name(payload, "project"),
+            optional_name(payload, "name"),
         )
+        self.send_json(report.to_dict())
 
     def put_file(self, _match: re.Match[str]) -> None:
         payload = self.read_json()
-        file = write_repo_file(
-            self.repo,
+        file = operations.ContentOperations(self.repo).write_file(
             payload.get("path"),
             payload.get("content"),
             expected_revision(payload),
@@ -704,7 +439,9 @@ class Handler(BaseHTTPRequestHandler):
             if not revisions:
                 raise ApiError(428, "revision is required; reload the file before changing it")
             revision = expected_revision({"revision": revisions[0]})
-        self.send_json(delete_repo_file(self.repo, value, revision))
+        self.send_json(
+            operations.ContentOperations(self.repo).delete_file(value, revision)
+        )
 
     def serve_static(self, route: str) -> None:
         relative = route.lstrip("/") or "index.html"

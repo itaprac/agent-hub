@@ -192,29 +192,41 @@ python3 - "$REPO" <<'PY'
 from pathlib import Path
 import sys
 
-from agenthub import files, repository, webapp
+import threading
+
+from agenthub import operations
 
 repo = Path(sys.argv[1])
+content_operations = operations.ContentOperations(repo)
+entered = threading.Event()
+release = threading.Event()
+original = operations.config.load_machine_projection
 
-with repository.mutation():
-    try:
-        webapp.status_result(repo)
-    except webapp.ApiError as exc:
-        assert exc.status == 423
-        assert exc.message == "repository is busy; try again after the current operation finishes"
-    else:
-        raise AssertionError("status waited for or bypassed the held lock")
+def load(path):
+    entered.set()
+    assert release.wait(timeout=5)
+    return original(path)
 
+operations.config.load_machine_projection = load
+thread = threading.Thread(target=content_operations.status)
+thread.start()
+assert entered.wait(timeout=5)
+try:
     for operation in (
-        lambda: files.write(repo, "config/skills.toml", "", None),
-        lambda: files.delete(repo, "config/skills.toml", None),
+        content_operations.status,
+        lambda: content_operations.write_file("config/skills.toml", "", None),
+        lambda: content_operations.delete_file("config/skills.toml", None),
     ):
         try:
             operation()
-        except repository.RepositoryBusyError as exc:
+        except operations.RepositoryBusyError as exc:
             assert str(exc) == "repository is busy; try again after the current operation finishes"
         else:
             raise AssertionError("repository operation waited for or bypassed the held lock")
+finally:
+    release.set()
+    thread.join(timeout=5)
+assert not thread.is_alive()
 PY
 echo "PASS"
 

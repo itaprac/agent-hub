@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from agenthub import operations
+
 from conftest import ROOT
 
 
@@ -34,10 +36,12 @@ def test_add_skill_creates_the_template_and_exits_zero(content: Path, home: Path
 
 
 def test_add_skill_duplicate_exits_one(content: Path, home: Path) -> None:
+    expected = operations.ContentOperations(content).add_skill("alpha")
     result = module(home, "--repo", str(content), "add-skill", "alpha")
     assert result.returncode == 1
-    assert "[ERROR]" in result.stdout
-    assert "already exists" in result.stdout
+    assert result.stdout.splitlines() == [
+        f"[{check.level}] {check.text}" for check in expected.checks
+    ]
 
 
 def test_add_skill_unknown_project_exits_one(content: Path, home: Path) -> None:
@@ -63,7 +67,10 @@ def test_adopt_collision_exits_one(content: Path, home: Path) -> None:
     source = home / "alpha"
     source.mkdir()
     (source / "SKILL.md").write_text("# alpha\n", encoding="utf-8")
+    expected = operations.ContentOperations(content).adopt(str(source))
     result = module(home, "--repo", str(content), "adopt", str(source))
     assert result.returncode == 1
-    assert "[ERROR]" in result.stdout
+    assert result.stdout.splitlines() == [
+        f"[{check.level}] {check.text}" for check in expected.checks
+    ]
     assert source.is_dir() and not source.is_symlink()

@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agenthub import config, core
+from agenthub import operations
 
 from conftest import ROOT
 
@@ -37,7 +37,7 @@ def test_status_reports_missing_targets_and_exits_one(content: Path, home: Path)
 
 
 def test_status_on_an_applied_repository_exits_zero(content: Path, home: Path) -> None:
-    core.apply_projection(config.load_machine_projection(content))
+    operations.ContentOperations(content).apply()
     result = module(home, "--repo", str(content), "status")
     assert result.returncode == 0
     assert f"[ok] claude global/alpha: {home}/.claude/skills/alpha" in result.stdout
@@ -45,7 +45,10 @@ def test_status_on_an_applied_repository_exits_zero(content: Path, home: Path) -
 
 def test_status_output_matches_the_structured_report(content: Path, home: Path) -> None:
     result = module(home, "--repo", str(content), "status")
-    expected = [f"[{check.level}] {check.text}" for check in core.status(content).checks]
+    expected = [
+        f"[{check.level}] {check.text}"
+        for check in operations.ContentOperations(content).status().checks
+    ]
     assert result.stdout.splitlines() == expected
 
 

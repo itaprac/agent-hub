@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agenthub import config, core
+from agenthub import config, core, operations
 
 from conftest import AGENTS_TOML, MACHINE_ID, write
 
@@ -149,7 +149,7 @@ def test_retired_polish_marker_is_drift_and_untouched(content: Path, home: Path)
     original = f"Before\n\n{retired_marker}\nold\n{core.END_MARKER}\n\nAfter\n"
     target.write_text(original, encoding="utf-8")
 
-    status = core.status(content)
+    status = operations.ContentOperations(content).status()
     status_check = find(status, target)
     assert status_check.level == "STALE"
     assert status_check.text.endswith("has missing or malformed managed markers")
@@ -181,7 +181,7 @@ def test_malformed_markers_are_drift_and_untouched(
     target = home / ".claude" / "CLAUDE.md"
     target.write_text(malformed, encoding="utf-8")
 
-    status = core.status(content)
+    status = operations.ContentOperations(content).status()
     status_check = find(status, target)
     assert status_check.level == "STALE"
     assert status_check.text.endswith("has missing or malformed managed markers")

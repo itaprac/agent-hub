@@ -18,7 +18,7 @@ App files (public repository):
 agent-hub/
   hub.py, web.py, usage.py   # compatibility shims
   agenthub/                  # package: core, cli, config, fileio, files,
-                             #   gitio, repository, setup, usage, webapp
+                             #   gitio, operations, setup, usage, webapp
   setup.sh                   # installer (see the setup spec in issue #23/#24)
   example-content/           # starter Content repository
   web/                       # Web UI frontend

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 import pytest
 
-from agenthub import core
+from agenthub import operations
 
 
 def get(base: str, route: str) -> dict:
@@ -22,7 +23,7 @@ def test_status_reports_the_same_lines_as_the_package(server: str, content: Path
     payload = get(server, "/api/status")
     assert payload["command"] == "status"
     assert payload["exit_code"] == 1
-    assert payload["lines"] == core.status(content).lines()
+    assert payload["lines"] == operations.ContentOperations(content).status().lines()
 
 
 def test_status_keeps_the_line_shape_the_browser_reads(server: str) -> None:
@@ -33,7 +34,7 @@ def test_status_keeps_the_line_shape_the_browser_reads(server: str) -> None:
 
 def test_status_exposes_the_structured_result(server: str, content: Path) -> None:
     payload = get(server, "/api/status")
-    assert payload["machine_id"] == core.status(content).machine_id
+    assert payload["machine_id"] == operations.ContentOperations(content).status().machine_id
     assert payload["repo"] == str(content)
     assert payload["problems"] == 4
     kinds = {check["kind"] for check in payload["checks"]}
@@ -41,9 +42,7 @@ def test_status_exposes_the_structured_result(server: str, content: Path) -> Non
 
 
 def test_status_turns_clean_after_apply(server: str, content: Path) -> None:
-    from agenthub import config
-
-    core.apply_projection(config.load_machine_projection(content))
+    operations.ContentOperations(content).apply()
     payload = get(server, "/api/status")
     assert payload["exit_code"] == 0
     assert payload["problems"] == 0
@@ -81,3 +80,32 @@ def test_invalid_configuration_fails_the_state_request(server: str, content: Pat
 def test_status_lines_never_span_more_than_one_line(server: str) -> None:
     payload = get(server, "/api/status")
     assert all("\n" not in line["text"] for line in payload["lines"])
+
+
+def test_status_contention_returns_423_without_waiting(
+    server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    load = operations.config.load_machine_projection
+
+    def slow_load(repo: Path) -> operations.config.MachineProjection:
+        entered.set()
+        assert release.wait(timeout=5)
+        return load(repo)
+
+    monkeypatch.setattr(operations.config, "load_machine_projection", slow_load)
+    first = threading.Thread(target=lambda: get(server, "/api/status"))
+    first.start()
+    assert entered.wait(timeout=5)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(f"{server}/api/status", timeout=2)
+        assert error.value.code == 423
+        assert json.loads(error.value.read().decode("utf-8")) == {
+            "error": "repository is busy; try again after the current operation finishes"
+        }
+    finally:
+        release.set()
+        first.join(timeout=5)
+    assert not first.is_alive()

@@ -17,7 +17,6 @@ from .config import (
     SkillTarget,
     expand_path,
     load_machine_projection,
-    machine_name,
     validate_name,
 )
 
@@ -376,28 +375,6 @@ def apply_report(projection: MachineProjection, dry_run: bool = False) -> ApplyR
     )
 
 
-def apply_error_report(
-    repo: Path, message: str, *, kind: str, exit_code: int, dry_run: bool
-) -> ApplyReport:
-    """Report a failed apply the way the CLI does: one error line and its exit code."""
-    return ApplyReport(
-        machine_id="",
-        hostname=machine_name(),
-        repo=str(repo),
-        checks=(StatusCheck(kind=kind, level="ERROR", text=one_line(message), target=str(repo)),),
-        exit_code=exit_code,
-        dry_run=dry_run,
-    )
-
-
-def apply_projection(projection: MachineProjection, dry_run: bool = False) -> int:
-    """Print the apply report the way the CLI does and return its exit code."""
-    report = apply_report(projection, dry_run=dry_run)
-    for check in report.checks:
-        print(f"[{check.level}] {check.text}")
-    return report.exit_code
-
-
 # ---------------------------------------------------------------------- status
 
 def check_copy_skill(item: SkillTarget) -> StatusCheck:
@@ -547,22 +524,6 @@ def status_report(projection: MachineProjection) -> StatusReport:
     )
 
 
-def config_error_report(repo: Path, message: str) -> StatusReport:
-    """Report an unreadable fleet configuration the way the CLI does: one error, exit 2."""
-    return StatusReport(
-        machine_id="",
-        hostname=machine_name(),
-        repo=str(repo),
-        checks=(StatusCheck(kind="config", level="ERROR", text=one_line(message), target=str(repo)),),
-        exit_code=2,
-    )
-
-
-def status(repo: Path) -> StatusReport:
-    """Load the fleet configuration for one Content repository and report status."""
-    return status_report(load_machine_projection(repo))
-
-
 # ------------------------------------------------------------------------ sync
 
 def git_action(
@@ -703,20 +664,6 @@ def sync_report(projection: MachineProjection, dry_run: bool = False) -> SyncRep
     return report(1 if applied.exit_code or not push_ok else 0)
 
 
-def sync_error_report(
-    repo: Path, message: str, *, kind: str, exit_code: int, dry_run: bool
-) -> SyncReport:
-    """Report a failed sync the way the CLI does: one error line and its exit code."""
-    return SyncReport(
-        machine_id="",
-        hostname=machine_name(),
-        repo=str(repo),
-        checks=(StatusCheck(kind=kind, level="ERROR", text=one_line(message), target=str(repo)),),
-        exit_code=exit_code,
-        dry_run=dry_run,
-    )
-
-
 # ---------------------------------------------------------------------- skills
 
 SKILL_TEMPLATE = (
@@ -838,26 +785,4 @@ def adopt_skill_report(
     return report(
         skill_check("ok", f"adopted {source} -> {destination}", **fields),
         skill_check("ok", "run 'hub apply' to deploy the skill to other agents", **fields),
-    )
-
-
-def add_skill_error_report(repo: Path, message: str, *, kind: str, exit_code: int) -> AddSkillReport:
-    """Report a failed skill creation the way the CLI does: one error line and its exit code."""
-    return AddSkillReport(
-        machine_id="",
-        hostname=machine_name(),
-        repo=str(repo),
-        checks=(StatusCheck(kind=kind, level="ERROR", text=one_line(message), target=str(repo)),),
-        exit_code=exit_code,
-    )
-
-
-def adopt_error_report(repo: Path, message: str, *, kind: str, exit_code: int) -> AdoptReport:
-    """Report a failed skill adoption the way the CLI does: one error line and its exit code."""
-    return AdoptReport(
-        machine_id="",
-        hostname=machine_name(),
-        repo=str(repo),
-        checks=(StatusCheck(kind=kind, level="ERROR", text=one_line(message), target=str(repo)),),
-        exit_code=exit_code,
     )

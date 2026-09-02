@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agenthub import config
+from agenthub import config, operations
 
 SAME_ORIGIN = {"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}
 
@@ -42,9 +42,9 @@ def test_add_skill_creates_through_the_package(server: str, content: Path) -> No
 def test_add_skill_duplicate_is_an_error_line_with_exit_one(
     server: str, content: Path
 ) -> None:
+    expected = operations.ContentOperations(content).add_skill("alpha").to_dict()
     payload = post(server, "/api/add-skill", {"name": "alpha"})
-    assert payload["exit_code"] == 1
-    assert [line["level"] for line in payload["lines"]] == ["ERROR"]
+    assert payload == expected
 
 
 def test_add_skill_unknown_project_is_rejected(server: str, content: Path) -> None:
@@ -72,9 +72,9 @@ def test_adopt_collision_is_refused(server: str, content: Path, home: Path) -> N
     source = home / "alpha"
     source.mkdir()
     (source / "SKILL.md").write_text("# alpha\n", encoding="utf-8")
+    expected = operations.ContentOperations(content).adopt(str(source)).to_dict()
     payload = post(server, "/api/adopt", {"path": str(source)})
-    assert payload["exit_code"] == 1
-    assert [line["level"] for line in payload["lines"]] == ["ERROR"]
+    assert payload == expected
     assert source.is_dir() and not source.is_symlink()
 
 

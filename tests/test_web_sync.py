@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agenthub import config, core
+from agenthub import operations
 
 from test_web_apply import post
 
@@ -40,8 +40,6 @@ def test_invalid_configuration_is_one_error_line_with_exit_two(
 def test_sync_reports_the_same_lines_as_the_package(
     server: str, content: Path
 ) -> None:
-    expected = core.sync_report(
-        config.load_machine_projection(content), dry_run=True
-    ).lines()
+    expected = operations.ContentOperations(content).sync(dry_run=True).lines()
     payload = post(server, "/api/run", {"command": "sync", "dry_run": True})
     assert payload["lines"] == expected

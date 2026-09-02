@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agenthub import config, core
+from agenthub import operations
 
 SAME_ORIGIN = {"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}
 
@@ -42,9 +42,7 @@ def test_dry_run_reports_but_changes_nothing(server: str, home: Path) -> None:
 
 
 def test_apply_reports_the_same_lines_as_the_package(server: str, content: Path) -> None:
-    expected = core.apply_report(
-        config.load_machine_projection(content), dry_run=True
-    ).lines()
+    expected = operations.ContentOperations(content).apply(dry_run=True).lines()
     payload = post(server, "/api/run", {"command": "apply", "dry_run": True})
     assert payload["lines"] == expected
     assert all(set(line) == {"level", "text"} for line in payload["lines"])
@@ -69,25 +67,13 @@ def test_invalid_configuration_is_one_error_line_with_exit_two(
     assert "mode" in payload["lines"][0]["text"]
 
 
-def test_local_peer_run_reuses_one_machine_projection(
+def test_local_peer_run_uses_the_same_content_operation_as_a_local_run(
     server: str,
-    content: Path,
     home: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    loads = 0
-    original = config.load_machine_projection
-
-    def load(repo: Path) -> config.MachineProjection:
-        nonlocal loads
-        loads += 1
-        return original(repo)
-
-    monkeypatch.setattr(config, "load_machine_projection", load)
     payload = post(server, "/api/peers/testmachine/run", {"command": "apply"})
     assert payload["exit_code"] == 0
     assert (home / ".claude" / "skills" / "alpha").is_symlink()
-    assert loads == 1
 
 
 def test_apply_requires_a_browser_or_peer_identity(server: str, home: Path) -> None:
