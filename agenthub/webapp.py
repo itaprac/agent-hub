@@ -4,21 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import contextlib
 import dataclasses
-import hmac
 import json
-import os
 import re
-import socket
-import ssl
 import sys
-import tomllib
 import traceback
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,9 +18,9 @@ from typing import Any
 
 from . import config as hub_config
 from . import core as hub_core
-from . import fileio
 from . import files as content_files
 from . import gitio
+from . import peers
 from . import repository
 from . import usage
 
@@ -36,12 +28,6 @@ TEXT_SUFFIXES = content_files.TEXT_SUFFIXES
 MAX_FILE_BYTES = content_files.MAX_FILE_BYTES
 MAX_BODY_BYTES = content_files.MAX_FILE_BYTES + 64 * 1024
 RUN_COMMANDS = frozenset({"apply", "sync"})
-PEER_TOKEN_ENV = "AGENT_HUB_PEER_TOKEN"
-PEER_TOKEN_FILE_ENV = "AGENT_HUB_PEER_TOKEN_FILE"
-DEFAULT_PEER_TOKEN_FILE = "~/.config/agent-hub/peer-token"
-PEER_TIMEOUT = 5
-PEER_RUN_TIMEOUT = 120
-USAGE_PEER_TIMEOUT = 25
 
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -210,62 +196,34 @@ def run_command(
     raise ApiError(400, f"unknown command: {command}")
 
 
+class _WebLocalMachine:
+    """Adapt local package operations to the Peer federation seam."""
+
+    def __init__(self, repo: Path) -> None:
+        self._repo = repo
+
+    def git(self, *, fetch: bool) -> dict[str, Any]:
+        return git_state(self._repo, fetch=fetch)
+
+    def status(
+        self, projection: hub_config.MachineProjection
+    ) -> dict[str, Any]:
+        return status_result(self._repo, projection)
+
+    def usage(self, *, days: int, time_zone: str | None) -> dict[str, Any]:
+        return usage.read_summary(days=days, time_zone=time_zone)
+
+    def run(
+        self,
+        projection: hub_config.MachineProjection,
+        *,
+        command: str,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        return run_command(self._repo, command, dry_run, projection)
+
+
 # --------------------------------------------------------------------------- peers/git
-
-def load_peer_token() -> str:
-    """Load the server-to-server secret without putting it in the repository."""
-    environment_token = os.environ.get(PEER_TOKEN_ENV, "").strip()
-    if environment_token:
-        return environment_token
-
-    configured_path = os.environ.get(PEER_TOKEN_FILE_ENV, DEFAULT_PEER_TOKEN_FILE)
-    token_path = Path(os.path.expanduser(configured_path))
-    try:
-        return fileio.read_secret(token_path, require_value=True)
-    except fileio.SecretFileError as exc:
-        if exc.kind == "not_file":
-            message = f"peer token path is not a regular file: {token_path}"
-        elif exc.kind == "permissions":
-            message = f"peer token file must have mode 600: {token_path}"
-        elif exc.kind == "empty":
-            message = f"peer token file is empty: {token_path}"
-        else:
-            message = f"cannot read peer token file {token_path}: {exc.detail}"
-        raise ApiError(500, message) from exc
-
-def load_peers_config(repo: Path) -> dict[str, Any]:
-    """Load the optional federation config; a missing file disables federation."""
-    path = repo / "config" / "peers.toml"
-    if not path.is_file():
-        return {"token": load_peer_token(), "urls": {}, "resolve": {}}
-    try:
-        with path.open("rb") as handle:
-            data = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise ApiError(500, f"{path}: cannot read TOML: {exc}") from exc
-    urls = data.get("urls", {})
-    resolve = data.get("resolve", {})
-    if "token" in data:
-        raise ApiError(
-            500,
-            f"{path}: key 'token' is not allowed; use {PEER_TOKEN_ENV} or {DEFAULT_PEER_TOKEN_FILE}",
-        )
-    if not isinstance(urls, dict):
-        raise ApiError(500, f"{path}: key 'urls' must be a table")
-    if not isinstance(resolve, dict) or not all(
-        isinstance(key, str) and isinstance(value, str) and value.strip()
-        for key, value in resolve.items()
-    ):
-        raise ApiError(500, f"{path}: key 'resolve' must be a table of hostname = \"ip\"")
-    clean_urls: dict[str, str] = {}
-    for machine, url in urls.items():
-        if not isinstance(machine, str) or not isinstance(url, str) or not url.strip():
-            raise ApiError(500, f"{path}: peer URLs must be non-empty strings")
-        parsed = urllib.parse.urlsplit(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ApiError(500, f"{path}: invalid URL for '{machine}': {url}")
-        clean_urls[machine] = url.rstrip("/")
-    return {"token": load_peer_token(), "urls": clean_urls, "resolve": resolve}
 
 
 def git_state(repo: Path, fetch: bool = True) -> dict[str, Any]:
@@ -276,153 +234,6 @@ def git_state(repo: Path, fetch: bool = True) -> dict[str, Any]:
         raise ApiError(status, str(exc)) from exc
     except gitio.GitError as exc:
         raise ApiError(500, str(exc)) from exc
-
-
-def status_summary(result: dict[str, Any]) -> dict[str, int]:
-    # A peer that still runs an older agent-hub reports lines only.
-    if isinstance(result.get("problems"), int):
-        problems = result["problems"]
-    else:
-        problem_levels = {"MISSING", "DRIFT", "STALE", "ERROR"}
-        problems = sum(1 for line in result["lines"] if line.get("level") in problem_levels)
-    return {"exit_code": int(result["exit_code"]), "problems": problems}
-
-
-def peer_json(
-    url: str,
-    timeout: int,
-    *,
-    payload: dict[str, Any] | None = None,
-    token: str = "",
-    resolve: dict[str, str] | None = None,
-) -> Any:
-    data = None if payload is None else json.dumps(payload).encode("utf-8")
-    headers = {"Accept": "application/json"}
-    if data is not None:
-        headers["Content-Type"] = "application/json"
-        headers["X-Hub-Token"] = token
-    parsed = urllib.parse.urlsplit(url)
-    if resolve and parsed.hostname in resolve:
-        # curl --resolve style: connect to the pinned IP but keep the original
-        # name in the Host header (tailscale serve routes by Host). Plain HTTP
-        # only - with HTTPS the SNI would still carry the IP.
-        address = resolve[parsed.hostname]
-        netloc = f"{address}:{parsed.port}" if parsed.port else address
-        headers["Host"] = parsed.netloc
-        url = urllib.parse.urlunsplit(parsed._replace(netloc=netloc))
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
-    context = ssl.create_default_context() if url.startswith("https://") else None
-    try:
-        with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
-            raw = response.read(MAX_BODY_BYTES + 1)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read(MAX_BODY_BYTES).decode("utf-8", errors="replace").strip()
-        raise ApiError(502, f"peer returned HTTP {exc.code}: {detail or exc.reason}") from exc
-    except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
-        reason = getattr(exc, "reason", exc)
-        if isinstance(reason, (TimeoutError, socket.timeout)):
-            reason = "timeout"
-        raise ApiError(502, str(reason)) from exc
-    if len(raw) > MAX_BODY_BYTES:
-        raise ApiError(502, "peer response is too large")
-    try:
-        return json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ApiError(502, f"peer returned invalid JSON: {exc}") from exc
-
-
-def peer_machine(machine: str, url: str, resolve: dict[str, str] | None = None) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "machine": machine,
-        "local": False,
-        "online": False,
-        "url": url,
-        "git": None,
-        "status": None,
-    }
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            git_future = executor.submit(peer_json, f"{url}/api/git?fetch=1", PEER_TIMEOUT, resolve=resolve)
-            status_future = executor.submit(peer_json, f"{url}/api/status", PEER_TIMEOUT, resolve=resolve)
-            remote_git = git_future.result()
-            remote_status = status_future.result()
-        if not isinstance(remote_git, dict) or not isinstance(remote_status, dict):
-            raise ApiError(502, "peer returned an unexpected response")
-        result.update(online=True, git=remote_git, status=status_summary(remote_status))
-    except ApiError as exc:
-        result["error"] = exc.message
-    return result
-
-
-def peers_state(repo: Path) -> dict[str, Any]:
-    projection = require_projection(repo)
-    machine_id = projection.machine_id
-    config = load_peers_config(repo)
-    urls = config["urls"] if machine_id in config["urls"] else {}
-    local = {
-        "machine": machine_id,
-        "local": True,
-        "online": True,
-        "url": None,
-        "git": git_state(repo, fetch=True),
-        "status": status_summary(status_result(repo, projection)),
-    }
-    remote_items = [(machine, url) for machine, url in sorted(urls.items()) if machine != machine_id]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(remote_items))) as executor:
-        remotes = list(
-            executor.map(lambda item: peer_machine(*item, resolve=config["resolve"]), remote_items)
-        )
-    machines = [local, *remotes]
-    if any(not machine["online"] for machine in machines):
-        in_sync: bool | None = None
-    else:
-        heads = {machine["git"]["head"]["sha"] for machine in machines}
-        in_sync = len(heads) == 1 and all(
-            machine["git"][key] == 0
-            for machine in machines
-            for key in ("dirty", "ahead", "behind")
-        )
-    return {"self": machine_id, "in_sync": in_sync, "machines": machines}
-
-
-def usage_state(
-    repo: Path, days: int, time_zone: str | None, local_only: bool
-) -> dict[str, Any]:
-    try:
-        machine_id = hub_config.load_machine_projection(repo).machine_id
-    except hub_config.ConfigError:
-        machine_id = os.uname().nodename
-    local = usage.attach_machine(usage.read_summary(days=days, time_zone=time_zone), machine_id)
-    time_zone = local["timeZone"]
-    if local_only:
-        return usage.merge_summaries([local])
-    config = load_peers_config(repo)
-    urls = config["urls"] if machine_id in config["urls"] else {}
-    remote_items = [(machine, url) for machine, url in sorted(urls.items()) if machine != machine_id]
-    if not remote_items:
-        return usage.merge_summaries([local])
-
-    def fetch_peer(item: tuple[str, str]) -> dict[str, Any]:
-        machine, url = item
-        query = urllib.parse.urlencode({"days": days, "tz": time_zone, "local": "1"})
-        try:
-            payload = peer_json(
-                f"{url}/api/usage?{query}",
-                USAGE_PEER_TIMEOUT,
-                resolve=config["resolve"],
-            )
-        except ApiError as exc:
-            detail = exc.message
-            if "HTTP 404" in detail:
-                detail = "older agent-hub without a usage API; transcripts on this machine are not included"
-            return usage.peer_failure(machine, detail)
-        if not isinstance(payload, dict) or "buckets" not in payload:
-            return usage.peer_failure(machine, "unexpected usage response")
-        return usage.attach_machine(payload, machine)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(remote_items))) as executor:
-        remotes = list(executor.map(fetch_peer, remote_items))
-    return usage.merge_summaries([local, *remotes])
 
 
 # --------------------------------------------------------------------------- state
@@ -630,6 +441,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self.quiet:
             sys.stderr.write(f"{self.address_string()} {format % args}\n")
 
+    def peer_federation(self) -> peers.PeerFederation:
+        return peers.PeerFederation(
+            self.repo, _WebLocalMachine(self.repo), peers.HttpPeerTransport()
+        )
+
     def send_payload(
         self,
         status: int,
@@ -710,9 +526,8 @@ class Handler(BaseHTTPRequestHandler):
         # from cross-site requests here. The shared secret is server-to-server only.
         if self.is_same_origin_browser_request():
             return
-        token = load_peers_config(self.repo)["token"]
         supplied = self.headers.get("X-Hub-Token", "")
-        if route == "/api/run" and token and hmac.compare_digest(supplied, token):
+        if route == "/api/run" and self.peer_federation().authorizes(supplied):
             return
         # The request body has not been consumed yet. Closing prevents a reverse
         # proxy from reusing this HTTP/1.1 connection with unread bytes on it.
@@ -723,6 +538,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.handle_route(method)
         except ApiError as exc:
+            self.send_error_json(exc.status, exc.message)
+        except peers.PeerError as exc:
             self.send_error_json(exc.status, exc.message)
         except content_files.FileError as exc:
             self.send_error_json(exc.status, exc.message)
@@ -783,7 +600,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(git_state(self.repo, fetch=fetch))
 
     def get_peers(self, _match: re.Match[str]) -> None:
-        self.send_json(peers_state(self.repo))
+        self.send_json(self.peer_federation().state())
 
     def get_status(self, _match: re.Match[str]) -> None:
         self.send_json(status_result(self.repo))
@@ -797,7 +614,9 @@ class Handler(BaseHTTPRequestHandler):
         time_zone = (query.get("tz") or [None])[0]
         local_only = (query.get("local") or ["0"])[0] == "1"
         self.send_json(
-            usage_state(self.repo, days=days, time_zone=time_zone, local_only=local_only)
+            self.peer_federation().usage(
+                days=days, time_zone=time_zone, local_only=local_only
+            )
         )
 
     def get_usage_settings(self, _match: re.Match[str]) -> None:
@@ -838,24 +657,11 @@ class Handler(BaseHTTPRequestHandler):
     def post_peer_run(self, match: re.Match[str]) -> None:
         machine = match.group("machine")
         command, dry_run = self._command_payload()
-        projection = require_projection(self.repo)
-        config = load_peers_config(self.repo)
-        urls = config["urls"] if projection.machine_id in config["urls"] else {}
-        if machine == projection.machine_id:
-            self.send_json(run_command(self.repo, command, dry_run, projection))
-            return
-        if machine not in urls:
-            raise ApiError(404, f"unknown machine: {machine}")
-        response = peer_json(
-            f"{urls[machine]}/api/run",
-            PEER_RUN_TIMEOUT,
-            payload={"command": command, "dry_run": dry_run},
-            token=config["token"],
-            resolve=config["resolve"],
+        self.send_json(
+            self.peer_federation().run(
+                machine, command=command, dry_run=dry_run
+            )
         )
-        if not isinstance(response, dict):
-            raise ApiError(502, "peer returned an unexpected response")
-        self.send_json(response)
 
     def post_add_skill(self, _match: re.Match[str]) -> None:
         payload = self.read_json()
