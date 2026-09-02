@@ -4,28 +4,56 @@ import { api } from "./api.js";
 import { $, clear, el, toast } from "./dom.js";
 import { MARK, PROVIDER_LABEL } from "./brands.js";
 import { store, update } from "./store.js";
-import {
-  createLocalController,
-  initialSettingsViewState,
-  reduceSettingsView,
-} from "./view-state.js";
 
 let painted = null;
-const controller = createLocalController(initialSettingsViewState, reduceSettingsView);
 
-export async function persistUsageSettings(patch) {
-  const usageSettings = await api.saveUsageSettings(patch);
-  controller.dispatch({ type: "save-finished" });
-  update({ usageSettings, usage: null });
-  return usageSettings;
+export function createSettingsController({ request, publish = () => {}, render = () => {}, reportError = () => {} }) {
+  let state = { tokenDraft: "" };
+  let projected = Object.freeze({ ...state });
+
+  const view = () => projected;
+  const change = (patch) => {
+    state = { ...state, ...patch };
+    projected = Object.freeze({ ...state });
+    render(projected);
+  };
+
+  async function save(patch) {
+    try {
+      const settings = await request(patch);
+      if (state.tokenDraft) change({ tokenDraft: "" });
+      publish(settings);
+      return true;
+    } catch (error) {
+      render(projected);
+      reportError(error);
+      return false;
+    }
+  }
+
+  return {
+    view,
+    editToken(value) {
+      const tokenDraft = String(value ?? "");
+      if (tokenDraft === state.tokenDraft) return false;
+      change({ tokenDraft });
+      return true;
+    },
+    save,
+    saveToken: () => save({ cursorToken: state.tokenDraft }),
+    clearToken: () => save({ cursorToken: "" }),
+  };
 }
 
-function reportPersistError(error) {
-  controller.dispatch({ type: "save-failed" });
-  painted = null;
-  paint(store);
-  toast(error.message, "err", 6000);
-}
+const controller = createSettingsController({
+  request: (patch) => api.saveUsageSettings(patch),
+  publish: (usageSettings) => update({ usageSettings, usage: null }),
+  render() {
+    painted = null;
+    paint(store);
+  },
+  reportError: (error) => toast(error.message, "err", 6000),
+});
 
 function sourceRow(name, checked, title, detail, extra) {
   return el("div", { class: "settings-source" }, [
@@ -65,7 +93,7 @@ function tokenForm(settings, tokenDraft) {
 function paint(snapshot) {
   const root = $("#settings-root");
   if (!root) return;
-  const view = controller.state;
+  const view = controller.view();
   const settings = snapshot.usageSettings || snapshot.usage?.settings || null;
   const key = [snapshot.tab, settings, view];
   if (painted && painted.every((item, index) => item === key[index])) return;
@@ -146,21 +174,21 @@ export function mountSettings() {
   root.addEventListener("change", (event) => {
     const toggle = event.target.closest("[data-usage-toggle]");
     if (!toggle) return;
-    persistUsageSettings({ [toggle.dataset.usageToggle]: toggle.checked }).catch(reportPersistError);
+    controller.save({ [toggle.dataset.usageToggle]: toggle.checked });
   });
   root.addEventListener("input", (event) => {
     if (event.target.closest("[name=cursorToken]")) {
-      controller.dispatch({ type: "edit-token", value: event.target.value });
+      controller.editToken(event.target.value);
     }
   });
   root.addEventListener("click", (event) => {
     if (!event.target.closest("[data-usage-clear-token]")) return;
-    persistUsageSettings({ cursorToken: "" }).catch(reportPersistError);
+    controller.clearToken();
   });
   root.addEventListener("submit", (event) => {
     const form = event.target.closest("[data-usage-token-form]");
     if (!form) return;
     event.preventDefault();
-    persistUsageSettings({ cursorToken: controller.state.tokenDraft }).catch(reportPersistError);
+    controller.saveToken();
   });
 }

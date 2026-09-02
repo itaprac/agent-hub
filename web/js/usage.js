@@ -5,11 +5,6 @@ import { api } from "./api.js";
 import { MARK, PROVIDER_LABEL, PROVIDER_ORDER } from "./brands.js";
 import { $, clear, el } from "./dom.js";
 import { store, update } from "./store.js";
-import {
-  createLocalController,
-  initialUsageViewState,
-  reduceUsageView,
-} from "./view-state.js";
 
 const WINDOWS = [
   { days: 1, label: "Past 24h" },
@@ -40,9 +35,76 @@ const USD = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" 
 const INTEGER = new Intl.NumberFormat("en-US");
 
 let painted = null;
-const controller = createLocalController(initialUsageViewState, reduceUsageView, () => {
-  painted = null;
-  paint(store);
+
+export function createUsageController({ request, publish = () => {}, render = () => {} }) {
+  let state = {
+    days: 30,
+    metric: "cost",
+    breakdown: "model",
+    loading: false,
+    error: null,
+  };
+  let requestId = 0;
+  let projected = Object.freeze({ ...state });
+
+  const view = () => projected;
+  const change = (patch) => {
+    state = { ...state, ...patch };
+    projected = Object.freeze({ ...state });
+    render(projected);
+  };
+
+  async function refresh() {
+    const currentRequest = ++requestId;
+    const days = state.days;
+    change({ loading: true, error: null });
+    try {
+      const usage = await request(days);
+      if (currentRequest !== requestId) return false;
+      change({ loading: false, error: null });
+      publish(usage);
+      return true;
+    } catch (error) {
+      if (currentRequest !== requestId) return false;
+      change({ loading: false, error: error.message || "Usage request failed" });
+      return false;
+    }
+  }
+
+  return {
+    view,
+    refresh,
+    selectDays(value) {
+      const days = Number(value);
+      if (!Number.isInteger(days) || days <= 0) return Promise.resolve(false);
+      if (days !== state.days) {
+        change({ days });
+        publish(null);
+      }
+      return refresh();
+    },
+    selectMetric(metric) {
+      if (!["cost", "tokens"].includes(metric) || metric === state.metric) return false;
+      change({ metric });
+      return true;
+    },
+    selectBreakdown(breakdown) {
+      if (!["model", "time"].includes(breakdown) || breakdown === state.breakdown) return false;
+      change({ breakdown });
+      return true;
+    },
+  };
+}
+
+const controller = createUsageController({
+  request: (days) => api.usage(days),
+  publish(usage) {
+    update(usage === null ? { usage: null } : { usage, usageSettings: usage.settings });
+  },
+  render() {
+    painted = null;
+    paint(store);
+  },
 });
 
 // ------------------------------------------------------------------ format
@@ -441,7 +503,7 @@ function coverageStrip(summary) {
 function paint(snapshot) {
   const root = $("#usage-root");
   if (!root) return;
-  const view = controller.state;
+  const view = controller.view();
   const key = [
     snapshot.tab,
     snapshot.usage,
@@ -721,23 +783,11 @@ export function renderUsage(snapshot) {
 }
 
 export async function refreshUsage() {
-  controller.dispatch({ type: "request-started" });
-  const { days, requestId } = controller.state;
-  try {
-    const usage = await api.usage(days);
-    if (requestId !== controller.state.requestId) return;
-    controller.dispatch({ type: "request-finished", requestId });
-    update({
-      usage,
-      usageSettings: usage.settings,
-    });
-  } catch (error) {
-    controller.dispatch({ type: "request-failed", requestId, error: error.message });
-  }
+  return controller.refresh();
 }
 
 export function isUsageLoading() {
-  return controller.state.loading;
+  return controller.view().loading;
 }
 
 export function mountUsage() {
@@ -747,23 +797,17 @@ export function mountUsage() {
     const daysBtn = event.target.closest("[data-usage-days]");
     if (daysBtn) {
       const days = Number(daysBtn.dataset.usageDays);
-      if (days === controller.state.days) {
-        refreshUsage();
-        return;
-      }
-      controller.dispatch({ type: "select-days", days });
-      update({ usage: null });
-      refreshUsage();
+      controller.selectDays(days);
       return;
     }
     const metricBtn = event.target.closest("[data-usage-metric]");
     if (metricBtn) {
-      controller.dispatch({ type: "select-metric", metric: metricBtn.dataset.usageMetric });
+      controller.selectMetric(metricBtn.dataset.usageMetric);
       return;
     }
     const breakdownBtn = event.target.closest("[data-usage-breakdown]");
     if (breakdownBtn) {
-      controller.dispatch({ type: "select-breakdown", breakdown: breakdownBtn.dataset.usageBreakdown });
+      controller.selectBreakdown(breakdownBtn.dataset.usageBreakdown);
     }
   });
 }

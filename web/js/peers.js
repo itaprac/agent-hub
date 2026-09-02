@@ -6,19 +6,113 @@ import { api } from "./api.js";
 import { $, clear, el, formatTime } from "./dom.js";
 import { confirmDialog } from "./modals.js";
 import { store, update } from "./store.js";
-import {
-  createLocalController,
-  initialPeersViewState,
-  projectPeersView,
-  reducePeersView,
-} from "./view-state.js";
 
 const AUTO_REFRESH_MS = 60000;
 const PEERS_NAMES_KEY = "agent-hub:peer-names";
 
-let runner = null; // (machine, command, dryRun) => Promise, provided by app.js
-let timer = null;
-const controller = createLocalController(initialPeersViewState, reducePeersView, () => renderPeers(store));
+export function createPeersController({
+  request,
+  publish = () => {},
+  render = () => {},
+  remember = () => {},
+  now = () => "",
+  confirm = async () => true,
+  isBusy = () => false,
+  isSupported = () => true,
+  schedule = setInterval,
+  cancel = clearInterval,
+}) {
+  let state = { dryRun: false, running: null };
+  let runner = null;
+  let timer = null;
+
+  const view = ({ busy = 0, loading = false } = {}) => {
+    const running = state.running ? Object.freeze({ ...state.running }) : null;
+    return Object.freeze({
+      dryRun: state.dryRun,
+      running,
+      controlsDisabled: Number(busy) > 0 || Boolean(state.running) || Boolean(loading),
+    });
+  };
+  const change = (patch) => {
+    state = { ...state, ...patch };
+    render(view());
+  };
+
+  function stopAutoRefresh() {
+    if (timer === null) return;
+    cancel(timer);
+    timer = null;
+  }
+
+  function startAutoRefresh() {
+    stopAutoRefresh();
+    timer = schedule(() => {
+      if (isBusy() || state.running || !isSupported()) return false;
+      return refresh();
+    }, AUTO_REFRESH_MS);
+  }
+
+  async function refresh() {
+    publish({ peersLoading: true });
+    try {
+      const peers = await request();
+      peers.at = now();
+      remember(peers.machines);
+      publish({ peers, peersSupported: true, peersError: null, peersLoading: false });
+      if (timer === null) startAutoRefresh();
+      return true;
+    } catch (error) {
+      if (error.status === 404) {
+        publish({ peers: null, peersSupported: false, peersError: null, peersLoading: false });
+        stopAutoRefresh();
+        return false;
+      }
+      publish({ peersError: error.message, peersLoading: false });
+      return false;
+    }
+  }
+
+  async function run(machine, command) {
+    if (state.running || !runner || !machine || !["apply", "sync"].includes(command)) return false;
+    const dryRun = state.dryRun;
+    if (command === "sync" && !dryRun) {
+      const approved = await confirm({
+        title: `Run sync on ${machine}?`,
+        body: "sync commits local changes, pulls with rebase, applies the state and pushes to the remote.",
+        confirmLabel: "Run sync",
+      });
+      if (!approved) return false;
+    }
+
+    change({ running: { machine, command, dryRun } });
+    try {
+      await runner(machine, command, dryRun);
+    } finally {
+      change({ running: null });
+      await refresh();
+    }
+    return true;
+  }
+
+  return {
+    view,
+    refresh,
+    run,
+    startAutoRefresh,
+    stopAutoRefresh,
+    setRunner(nextRunner) {
+      runner = nextRunner;
+    },
+    setDryRun(value) {
+      if (state.running) return false;
+      const dryRun = Boolean(value);
+      if (dryRun === state.dryRun) return false;
+      change({ dryRun });
+      return true;
+    },
+  };
+}
 
 // ------------------------------------------------------------------ data
 
@@ -44,71 +138,28 @@ function rememberedNames(state) {
   return names;
 }
 
-export async function refreshPeers() {
-  update({ peersLoading: true });
-  try {
-    const peers = await api.peers();
-    peers.at = formatTime();
-    rememberNames(peers.machines);
-    update({ peers, peersSupported: true, peersError: null, peersLoading: false });
-    // A backend that grew the endpoint since the last 404 gets its timer back.
-    if (timer === null) startAutoRefresh();
-  } catch (error) {
-    if (error.status === 404) {
-      // Backend without the peers endpoints: hide the panel, stay quiet.
-      update({ peers: null, peersSupported: false, peersError: null, peersLoading: false });
-      stopAutoRefresh();
-      return;
-    }
-    update({ peersError: error.message, peersLoading: false });
-  }
-}
+const controller = createPeersController({
+  request: () => api.peers(),
+  publish: (patch) => update(patch),
+  render: () => renderPeers(store),
+  remember: rememberNames,
+  now: formatTime,
+  confirm: confirmDialog,
+  isBusy: () => store.busy > 0,
+  isSupported: () => store.peersSupported,
+});
 
-function stopAutoRefresh() {
-  if (timer !== null) {
-    clearInterval(timer);
-    timer = null;
-  }
-}
-
-function startAutoRefresh() {
-  stopAutoRefresh();
-  timer = setInterval(() => {
-    // Paused while a command is running (peer or local) to keep the fan-out quiet.
-    if (store.busy > 0 || controller.state.running || !store.peersSupported) return;
-    refreshPeers();
-  }, AUTO_REFRESH_MS);
-}
-
-async function trigger(machine, command) {
-  if (controller.state.running || !runner) return;
-  const dryRun = controller.state.dryRun;
-
-  if (command === "sync" && !dryRun) {
-    const ok = await confirmDialog({
-      title: `Run sync on ${machine}?`,
-      body: "sync commits local changes, pulls with rebase, applies the state and pushes to the remote.",
-      confirmLabel: "Run sync",
-    });
-    if (!ok) return;
-  }
-
-  controller.dispatch({ type: "command-started", machine, command });
-  try {
-    await runner(machine, command, dryRun);
-  } finally {
-    controller.dispatch({ type: "command-finished" });
-    await refreshPeers();
-  }
+export function refreshPeers() {
+  return controller.refresh();
 }
 
 // No panel-local Refresh button: the top bar Refresh also calls refreshPeers().
 // The 60 s auto-refresh below keeps the cards fresh in the meantime.
 export function mountPeers({ run }) {
-  runner = run;
-  startAutoRefresh();
+  controller.setRunner(run);
+  controller.startAutoRefresh();
   $("#dry-run")?.addEventListener("change", (event) => {
-    controller.dispatch({ type: "set-dry-run", value: event.target.checked });
+    controller.setDryRun(event.target.checked);
   });
 }
 
@@ -187,7 +238,7 @@ function commandButtons(machine, view) {
           : online
             ? `hub.py ${command}${dryRun ? " --dry-run" : ""} on ${machine.machine}`
             : `${machine.machine} is unreachable`,
-        onClick: () => trigger(machine.machine, command),
+        onClick: () => controller.run(machine.machine, command),
       },
       [active ? el("span", { class: "spin", "aria-hidden": "true" }) : null, label]
     );
@@ -293,7 +344,7 @@ function card(machine, view) {
 
 export function renderPeers(snapshot) {
   const panel = $("#peers");
-  const view = projectPeersView(controller.state, {
+  const view = controller.view({
     busy: snapshot.busy,
     loading: snapshot.peersLoading,
   });
