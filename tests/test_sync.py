@@ -13,7 +13,7 @@ from conftest import MACHINE_ID, git, write
 
 
 def sync(repo: Path, dry_run: bool = False) -> core.SyncReport:
-    return core.sync_report(config.load_context(repo), dry_run=dry_run)
+    return core.sync_report(config.load_machine_projection(repo), dry_run=dry_run)
 
 
 def levels(report: core.SyncReport) -> list[str]:
@@ -98,6 +98,25 @@ def test_sync_rebases_upstream_commits_and_pushes_local_work(
     assert git(bare, "rev-parse", "main").stdout == git(
         content, "rev-parse", "HEAD"
     ).stdout
+
+
+def test_sync_apply_uses_the_machine_projection_pulled_in_the_same_run(
+    content: Path, home: Path, tmp_path: Path
+) -> None:
+    bare = add_remote(content, tmp_path)
+    checkout = second_clone(bare, tmp_path)
+    write(
+        checkout / "config" / "skills.toml",
+        '[alpha]\nmachines = ["other-machine"]\n',
+    )
+    git(checkout, "add", "-A")
+    git(checkout, "commit", "-q", "-m", "restrict alpha to another machine")
+    git(checkout, "push", "-q")
+
+    report = sync(content)
+
+    assert report.exit_code == 0
+    assert not (home / ".claude" / "skills" / "alpha").exists()
 
 
 def test_failed_rebase_stops_before_apply_and_push(

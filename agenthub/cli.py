@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import core
-from .config import ConfigError, load_context, repo_option_help, resolve_repo
+from .config import ConfigError, load_machine_projection, repo_option_help, resolve_repo
 
 DESCRIPTION = "Deploy agent skills and instructions from a single git repository."
 
@@ -49,17 +49,19 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--dry-run is supported only by apply and sync")
     try:
         repo = resolve_repo(args.repo)
-        ctx = load_context(repo)
+        projection = load_machine_projection(repo)
         if args.command == "apply":
-            return print_report(core.apply_report(ctx, dry_run=args.dry_run))
+            return print_report(core.apply_report(projection, dry_run=args.dry_run))
         if args.command == "status":
-            return print_report(core.status_report(ctx))
+            return print_report(core.status_report(projection))
         if args.command == "sync":
-            return print_report(core.sync_report(ctx, dry_run=args.dry_run))
+            return print_report(core.sync_report(projection, dry_run=args.dry_run))
         if args.command == "add-skill":
-            return print_report(core.add_skill_report(ctx, args.name, args.project))
+            return print_report(core.add_skill_report(projection, args.name, args.project))
         if args.command == "adopt":
-            return print_report(core.adopt_skill_report(ctx, args.path, args.project, args.name))
+            return print_report(
+                core.adopt_skill_report(projection, args.path, args.project, args.name)
+            )
     except ConfigError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 2

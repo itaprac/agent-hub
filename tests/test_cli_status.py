@@ -37,7 +37,7 @@ def test_status_reports_missing_targets_and_exits_one(content: Path, home: Path)
 
 
 def test_status_on_an_applied_repository_exits_zero(content: Path, home: Path) -> None:
-    core.apply_context(config.load_context(content))
+    core.apply_projection(config.load_machine_projection(content))
     result = module(home, "--repo", str(content), "status")
     assert result.returncode == 0
     assert f"[ok] claude global/alpha: {home}/.claude/skills/alpha" in result.stdout

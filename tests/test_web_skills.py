@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from agenthub import core
+from agenthub import config
 
 SAME_ORIGIN = {"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}
 
@@ -111,7 +111,7 @@ def test_state_lists_the_canonical_skill_directories(server: str, content: Path)
     (parent / "Bravo" / "SKILL.md").write_text("# Bravo\n", encoding="utf-8")
     state = get(server, "/api/state")
     names = [skill["name"] for skill in state["skills"]["global"]]
-    assert names == [directory.name for directory in core.skill_directories(parent)]
+    assert names == [directory.name for directory in config.skill_directories(parent)]
     assert names == ["alpha", "Bravo"]
 
 

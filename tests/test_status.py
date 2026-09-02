@@ -13,7 +13,7 @@ from conftest import MACHINE_ID
 
 
 def apply(repo: Path) -> None:
-    core.apply_context(config.load_context(repo))
+    core.apply_projection(config.load_machine_projection(repo))
 
 
 def by_text(report: core.StatusReport) -> dict[str, str]:

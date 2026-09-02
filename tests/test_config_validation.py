@@ -37,17 +37,16 @@ def test_invalid_skill_names_are_rejected(name: str) -> None:
         config.validate_name(name, "skill name")
 
 
-def test_context_reports_the_machine_and_configuration_paths(content: Path) -> None:
-    ctx = config.load_context(content)
-    assert ctx["repo"] == content
-    assert ctx["paths"]["agents"] == content / "config" / "agents.toml"
-    assert sorted(ctx["agents"]) == ["claude"]
+def test_projection_reports_the_machine_and_agents(content: Path) -> None:
+    projection = config.load_machine_projection(content)
+    assert projection.repo == content
+    assert [agent.name for agent in projection.agents] == ["claude"]
 
 
 def test_unknown_adapter_key_is_rejected(content: Path) -> None:
     (content / "config" / "agents.toml").write_text('[claude]\nskills = "~/x"\n', encoding="utf-8")
     with pytest.raises(config.ConfigError, match="unknown adapter key"):
-        config.load_context(content)
+        config.load_machine_projection(content)
 
 
 def test_unknown_machine_in_skills_is_rejected(content: Path) -> None:
@@ -55,15 +54,18 @@ def test_unknown_machine_in_skills_is_rejected(content: Path) -> None:
         '[alpha]\nmachines = ["nowhere"]\n', encoding="utf-8"
     )
     with pytest.raises(config.ConfigError, match="unknown machine id"):
-        config.load_context(content)
+        config.load_machine_projection(content)
 
 
 def test_machine_override_must_name_a_configured_machine(content: Path, monkeypatch) -> None:
     monkeypatch.setenv(config.MACHINE_ENV, "nowhere")
     with pytest.raises(config.ConfigError, match=config.MACHINE_ENV):
-        config.load_context(content)
+        config.load_machine_projection(content)
 
 
 def test_machine_override_selects_a_configured_machine(content: Path, monkeypatch) -> None:
+    monkeypatch.setattr(config, "machine_name", lambda: "unconfigured-hostname")
     monkeypatch.setenv(config.MACHINE_ENV, "other-machine")
-    assert config.load_context(content)["machine_id"] == "other-machine"
+    projection = config.load_machine_projection(content)
+    assert projection.machine_id == "other-machine"
+    assert projection.hostname == "unconfigured-hostname"

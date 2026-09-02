@@ -43,7 +43,7 @@ def test_status_exposes_the_structured_result(server: str, content: Path) -> Non
 def test_status_turns_clean_after_apply(server: str, content: Path) -> None:
     from agenthub import config
 
-    core.apply_context(config.load_context(content))
+    core.apply_projection(config.load_machine_projection(content))
     payload = get(server, "/api/status")
     assert payload["exit_code"] == 0
     assert payload["problems"] == 0

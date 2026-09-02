@@ -82,21 +82,25 @@ def repository_operation() -> Iterator[None]:
 
 # --------------------------------------------------------------------------- hub
 
-def require_context(repo: Path) -> dict[str, Any]:
+def require_projection(repo: Path) -> hub_config.MachineProjection:
     try:
-        return hub_config.load_context(repo)
+        return hub_config.load_machine_projection(repo)
     except hub_config.ConfigError as exc:
         raise ApiError(500, str(exc)) from exc
     except (OSError, UnicodeError) as exc:
         raise ApiError(500, str(exc)) from exc
 
 
-def status_result(repo: Path, ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+def status_result(
+    repo: Path, projection: hub_config.MachineProjection | None = None
+) -> dict[str, Any]:
     """Report status from the shared package instead of parsing CLI output."""
     try:
         with repository_operation():
             report = hub_core.status_report(
-                ctx if ctx is not None else hub_config.load_context(repo)
+                projection
+                if projection is not None
+                else hub_config.load_machine_projection(repo)
             )
     except hub_config.ConfigError as exc:
         # The dashboard shows this inline, exactly as the parsed CLI error did.
@@ -106,11 +110,20 @@ def status_result(repo: Path, ctx: dict[str, Any] | None = None) -> dict[str, An
     return report.to_dict()
 
 
-def apply_result(repo: Path, dry_run: bool) -> dict[str, Any]:
+def apply_result(
+    repo: Path,
+    dry_run: bool,
+    projection: hub_config.MachineProjection | None = None,
+) -> dict[str, Any]:
     """Apply from the shared package instead of parsing CLI output."""
     try:
         with repository_operation():
-            report = hub_core.apply_report(hub_config.load_context(repo), dry_run=dry_run)
+            report = hub_core.apply_report(
+                projection
+                if projection is not None
+                else hub_config.load_machine_projection(repo),
+                dry_run=dry_run,
+            )
     except hub_config.ConfigError as exc:
         # The CLI reports an unreadable fleet configuration with one error, exit 2.
         report = hub_core.apply_error_report(
@@ -124,11 +137,20 @@ def apply_result(repo: Path, dry_run: bool) -> dict[str, Any]:
     return report.to_dict()
 
 
-def sync_result(repo: Path, dry_run: bool) -> dict[str, Any]:
+def sync_result(
+    repo: Path,
+    dry_run: bool,
+    projection: hub_config.MachineProjection | None = None,
+) -> dict[str, Any]:
     """Sync from the shared package instead of parsing CLI output."""
     try:
         with repository_operation():
-            report = hub_core.sync_report(hub_config.load_context(repo), dry_run=dry_run)
+            report = hub_core.sync_report(
+                projection
+                if projection is not None
+                else hub_config.load_machine_projection(repo),
+                dry_run=dry_run,
+            )
     except hub_config.ConfigError as exc:
         # The CLI reports an unreadable fleet configuration with one error, exit 2.
         report = hub_core.sync_error_report(
@@ -146,7 +168,9 @@ def add_skill_result(repo: Path, name: str, project: str | None) -> dict[str, An
     """Create a skill through the shared package instead of parsing CLI output."""
     try:
         with repository_operation():
-            report = hub_core.add_skill_report(hub_config.load_context(repo), name, project)
+            report = hub_core.add_skill_report(
+                hub_config.load_machine_projection(repo), name, project
+            )
     except hub_config.ConfigError as exc:
         # The CLI reports an unreadable fleet configuration with one error, exit 2.
         report = hub_core.add_skill_error_report(repo, str(exc), kind="config", exit_code=2)
@@ -161,7 +185,9 @@ def adopt_result(
     """Adopt a skill through the shared package instead of parsing CLI output."""
     try:
         with repository_operation():
-            report = hub_core.adopt_skill_report(hub_config.load_context(repo), path, project, name)
+            report = hub_core.adopt_skill_report(
+                hub_config.load_machine_projection(repo), path, project, name
+            )
     except hub_config.ConfigError as exc:
         # The CLI reports an unreadable fleet configuration with one error, exit 2.
         report = hub_core.adopt_error_report(repo, str(exc), kind="config", exit_code=2)
@@ -170,12 +196,17 @@ def adopt_result(
     return report.to_dict()
 
 
-def run_command(repo: Path, command: str, dry_run: bool) -> dict[str, Any]:
+def run_command(
+    repo: Path,
+    command: str,
+    dry_run: bool,
+    projection: hub_config.MachineProjection | None = None,
+) -> dict[str, Any]:
     """Run one operator command through the shared package."""
     if command == "apply":
-        return apply_result(repo, dry_run)
+        return apply_result(repo, dry_run, projection)
     if command == "sync":
-        return sync_result(repo, dry_run)
+        return sync_result(repo, dry_run, projection)
     raise ApiError(400, f"unknown command: {command}")
 
 
@@ -324,8 +355,8 @@ def peer_machine(machine: str, url: str, resolve: dict[str, str] | None = None) 
 
 
 def peers_state(repo: Path) -> dict[str, Any]:
-    ctx = require_context(repo)
-    machine_id = ctx["machine_id"]
+    projection = require_projection(repo)
+    machine_id = projection.machine_id
     config = load_peers_config(repo)
     urls = config["urls"] if machine_id in config["urls"] else {}
     local = {
@@ -334,7 +365,7 @@ def peers_state(repo: Path) -> dict[str, Any]:
         "online": True,
         "url": None,
         "git": git_state(repo, fetch=True),
-        "status": status_summary(status_result(repo, ctx)),
+        "status": status_summary(status_result(repo, projection)),
     }
     remote_items = [(machine, url) for machine, url in sorted(urls.items()) if machine != machine_id]
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(remote_items))) as executor:
@@ -358,7 +389,7 @@ def usage_state(
     repo: Path, days: int, time_zone: str | None, local_only: bool
 ) -> dict[str, Any]:
     try:
-        machine_id = hub_config.load_context(repo)["machine_id"]
+        machine_id = hub_config.load_machine_projection(repo).machine_id
     except hub_config.ConfigError:
         machine_id = os.uname().nodename
     local = usage.attach_machine(usage.read_summary(days=days, time_zone=time_zone), machine_id)
@@ -406,7 +437,7 @@ def repo_relative(path: Path, repo: Path) -> str:
 def list_skills(parent: Path, repo: Path) -> list[dict[str, Any]]:
     skills = []
     # The package owns the canonical skill directory rule (CONTEXT.md).
-    for child in hub_core.skill_directories(parent):
+    for child in hub_config.skill_directories(parent):
         files = []
         for path in sorted(child.rglob("*"), key=lambda item: str(item).lower()):
             if not path.is_file() or any(
@@ -448,47 +479,43 @@ def list_instructions(directory: Path, repo: Path, agents: list[str]) -> list[di
 
 
 def build_state(repo: Path) -> dict[str, Any]:
-    ctx = require_context(repo)
-    repo = ctx["repo"]
-    machine_id = ctx["machine_id"]
-    agent_names = sorted(ctx["agents"])
+    projection = require_projection(repo)
+    repo = projection.repo
+    machine_id = projection.machine_id
 
     agents = [
         {
-            "name": name,
-            "mode": ctx["agents"][name].get("mode", "symlink"),
-            "keys": {key: value for key, value in sorted(ctx["agents"][name].items()) if key != "mode"},
+            "name": agent.name,
+            "mode": agent.mode,
+            "keys": dict(agent.target_templates),
         }
-        for name in agent_names
+        for agent in projection.agents
     ]
 
-    projects = []
-    for name, paths in sorted(ctx["projects"].items()):
-        raw = paths.get(machine_id)
-        resolved = str(hub_config.expand_path(raw)) if isinstance(raw, str) else None
-        if raw is None:
-            available, note = False, f"no path for machine '{machine_id}'"
-        elif not Path(resolved).is_dir():
-            available, note = False, "path does not exist on this machine"
-        else:
-            available, note = True, ""
-        projects.append(
-            {
-                "name": name,
-                "path": resolved,
-                "machines": dict(sorted(paths.items())),
-                "available": available,
-                "note": note,
-            }
-        )
+    projects = [
+        {
+            "name": project.name,
+            "path": str(project.path) if project.path is not None else None,
+            "machines": dict(project.machines),
+            "available": project.available,
+            "note": (
+                ""
+                if project.available
+                else project.reason
+                if project.availability == "no_path"
+                else "path does not exist on this machine"
+            ),
+        }
+        for project in projection.projects
+    ]
 
     skills_root = repo / "skills"
     instructions_root = repo / "instructions"
     project_names = [project["name"] for project in projects]
 
     # Only agents that declare an instructions target can use an overlay file.
-    global_agents = [name for name in agent_names if ctx["agents"][name].get("instructions_global")]
-    project_agents = [name for name in agent_names if ctx["agents"][name].get("instructions_project")]
+    global_agents = [agent.name for agent in projection.agents if agent.instructions_global]
+    project_agents = [agent.name for agent in projection.agents if agent.instructions_project]
 
     config_dir = repo / "config"
     known_configs = ["hub.toml", "agents.toml", "projects.toml", "skills.toml"]
@@ -499,7 +526,7 @@ def build_state(repo: Path) -> dict[str, Any]:
 
     return {
         "machine_id": machine_id,
-        "hostname": ctx["hostname"],
+        "hostname": projection.hostname,
         "repo": str(repo),
         "agents": agents,
         "projects": projects,
@@ -599,9 +626,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- helpers
 
-    def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
+    def log_message(self, format: str, *args: Any) -> None:
         if not self.quiet:
-            sys.stderr.write(f"{self.address_string()} {fmt % args}\n")
+            sys.stderr.write(f"{self.address_string()} {format % args}\n")
 
     def send_payload(
         self,
@@ -811,11 +838,11 @@ class Handler(BaseHTTPRequestHandler):
     def post_peer_run(self, match: re.Match[str]) -> None:
         machine = match.group("machine")
         command, dry_run = self._command_payload()
-        ctx = require_context(self.repo)
+        projection = require_projection(self.repo)
         config = load_peers_config(self.repo)
-        urls = config["urls"] if ctx["machine_id"] in config["urls"] else {}
-        if machine == ctx["machine_id"]:
-            self.send_json(run_command(self.repo, command, dry_run))
+        urls = config["urls"] if projection.machine_id in config["urls"] else {}
+        if machine == projection.machine_id:
+            self.send_json(run_command(self.repo, command, dry_run, projection))
             return
         if machine not in urls:
             raise ApiError(404, f"unknown machine: {machine}")

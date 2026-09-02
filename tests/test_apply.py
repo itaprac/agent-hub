@@ -15,7 +15,7 @@ from conftest import AGENTS_TOML, MACHINE_ID, write
 
 
 def apply(repo: Path, dry_run: bool = False) -> core.ApplyReport:
-    return core.apply_report(config.load_context(repo), dry_run=dry_run)
+    return core.apply_report(config.load_machine_projection(repo), dry_run=dry_run)
 
 
 def by_text(report: core.ApplyReport) -> dict[str, str]:
@@ -302,7 +302,7 @@ def test_hidden_and_empty_directories_are_not_skills(content: Path, home: Path) 
     write(skills / ".hidden" / "SKILL.md", "# hidden\n")
     (skills / "empty").mkdir()
     write(skills / "dotfiles-only" / ".secret", "hidden file\n")
-    assert [path.name for path in core.skill_directories(skills)] == ["alpha"]
+    assert [path.name for path in config.skill_directories(skills)] == ["alpha"]
     apply(content)
     deployed = sorted(path.name for path in (home / ".claude" / "skills").iterdir())
     assert deployed == ["alpha"]
@@ -312,6 +312,10 @@ def test_skill_directories_sort_case_insensitively(content: Path) -> None:
     skills = content / "skills" / "global"
     write(skills / "Bravo" / "SKILL.md", "# Bravo\n")
     write(skills / "charlie" / "SKILL.md", "# charlie\n")
-    assert [path.name for path in core.skill_directories(skills)] == ["alpha", "Bravo", "charlie"]
+    assert [path.name for path in config.skill_directories(skills)] == [
+        "alpha",
+        "Bravo",
+        "charlie",
+    ]
     names = [check.name for check in apply(content).checks if check.kind == "skill"]
     assert names[:3] == ["alpha", "Bravo", "charlie"]

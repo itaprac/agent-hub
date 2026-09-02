@@ -7,14 +7,16 @@ import hashlib
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Iterator, TypeVar
+from typing import Any, TypeVar
 
 from . import gitio
 from .config import (
     ConfigError,
-    config_error,
+    InstructionTarget,
+    MachineProjection,
+    SkillTarget,
     expand_path,
-    load_context,
+    load_machine_projection,
     machine_name,
     validate_name,
 )
@@ -28,186 +30,14 @@ MANAGED_NOTICE = (
 PROBLEM_LEVELS = frozenset({"MISSING", "DRIFT", "STALE", "ERROR"})
 
 
-# --------------------------------------------------------------------- targets
-
-def project_roots(ctx: dict[str, Any]) -> tuple[dict[str, Path], list[str]]:
-    roots: dict[str, Path] = {}
-    skipped: list[str] = []
-    machine_id = ctx["machine_id"]
-    for project, paths in sorted(ctx["projects"].items()):
-        if machine_id not in paths:
-            skipped.append(f"project {project}: no path for machine '{machine_id}'")
+def iter_orphaned_skill_links(projection: MachineProjection):
+    """Inspect projected symlink directories for entries no longer selected."""
+    repo_skills = (projection.repo / "skills").resolve(strict=False)
+    for managed in projection.managed_skill_directories:
+        if not managed.path.is_dir():
             continue
-        root = expand_path(paths[machine_id])
-        if not root.exists():
-            skipped.append(f"project {project}: path does not exist: {root}")
-            continue
-        if not root.is_dir():
-            skipped.append(f"project {project}: path is not a directory: {root}")
-            continue
-        roots[project] = root
-    return roots, skipped
-
-
-def skill_directories(parent: Path) -> list[Path]:
-    """The canonical skill directory rule (CONTEXT.md): a direct, non-hidden child
-    with at least one non-hidden file, in case-insensitive name order."""
-    if not parent.is_dir():
-        return []
-    result = []
-    for child in sorted(parent.iterdir(), key=lambda item: item.name.lower()):
-        if not child.is_dir() or child.name.startswith("."):
-            continue
-        visible = (
-            not any(part.startswith(".") for part in path.relative_to(child).parts)
-            for path in child.rglob("*")
-            if path.is_file()
-        )
-        if any(visible):
-            result.append(child)
-    return result
-
-
-def skill_allowed(ctx: dict[str, Any], skill: str, agent: str) -> bool:
-    settings = ctx["skills"].get(skill)
-    if settings is None:
-        return True
-    return ("agents" not in settings or agent in settings["agents"]) and (
-        "machines" not in settings or ctx["machine_id"] in settings["machines"]
-    )
-
-
-def format_target(
-    template: str,
-    agents_path: Path,
-    agent: str,
-    key: str,
-    *,
-    name: str = "",
-    project: str = "",
-    project_root: Path | None = None,
-) -> Path:
-    try:
-        rendered = template.format(
-            name=name, project=project, project_root=str(project_root or "")
-        )
-    except (KeyError, ValueError) as exc:
-        raise config_error(agents_path, f"{agent}.{key}", f"invalid path template: {exc}") from exc
-    return expand_path(rendered)
-
-
-def iter_skill_targets(ctx: dict[str, Any], roots: dict[str, Path]) -> Iterator[dict[str, Any]]:
-    agents_path = ctx["paths"]["agents"]
-    global_skills = skill_directories(ctx["repo"] / "skills" / "global")
-    for agent, settings in sorted(ctx["agents"].items()):
-        mode = settings.get("mode", "symlink")
-        template = settings.get("skills_global")
-        if template:
-            for source in global_skills:
-                if skill_allowed(ctx, source.name, agent):
-                    yield {
-                        "agent": agent,
-                        "project": None,
-                        "name": source.name,
-                        "source": source,
-                        "target": format_target(
-                            template, agents_path, agent, "skills_global", name=source.name
-                        ),
-                        "mode": mode,
-                    }
-
-        template = settings.get("skills_project")
-        if not template:
-            continue
-        for project, root in sorted(roots.items()):
-            project_skills = skill_directories(ctx["repo"] / "skills" / "projects" / project)
-            for source in project_skills:
-                if skill_allowed(ctx, source.name, agent):
-                    yield {
-                        "agent": agent,
-                        "project": project,
-                        "name": source.name,
-                        "source": source,
-                        "target": format_target(
-                            template,
-                            agents_path,
-                            agent,
-                            "skills_project",
-                            name=source.name,
-                            project=project,
-                            project_root=root,
-                        ),
-                        "mode": mode,
-                    }
-
-
-def skill_prune_directories(
-    ctx: dict[str, Any], roots: dict[str, Path]
-) -> Iterator[tuple[Path, set[str]]]:
-    agents_path = ctx["paths"]["agents"]
-    directories: dict[Path, set[str]] = {}
-    for agent, settings in sorted(ctx["agents"].items()):
-        # Copy targets cannot be safely attributed to this repository after deployment.
-        if settings.get("mode", "symlink") == "copy":
-            continue
-
-        template = settings.get("skills_global")
-        if template:
-            sources = skill_directories(ctx["repo"] / "skills" / "global")
-            targets = [
-                format_target(template, agents_path, agent, "skills_global", name=source.name)
-                for source in sources
-                if skill_allowed(ctx, source.name, agent)
-            ]
-            probe = format_target(
-                template, agents_path, agent, "skills_global", name="__agent_hub_skill__"
-            )
-            expected = directories.setdefault(probe.parent, set())
-            expected.update(target.name for target in targets if target.parent == probe.parent)
-
-        template = settings.get("skills_project")
-        if not template:
-            continue
-        for project, root in sorted(roots.items()):
-            sources = skill_directories(ctx["repo"] / "skills" / "projects" / project)
-            targets = [
-                format_target(
-                    template,
-                    agents_path,
-                    agent,
-                    "skills_project",
-                    name=source.name,
-                    project=project,
-                    project_root=root,
-                )
-                for source in sources
-                if skill_allowed(ctx, source.name, agent)
-            ]
-            probe = format_target(
-                template,
-                agents_path,
-                agent,
-                "skills_project",
-                name="__agent_hub_skill__",
-                project=project,
-                project_root=root,
-            )
-            expected = directories.setdefault(probe.parent, set())
-            expected.update(target.name for target in targets if target.parent == probe.parent)
-
-    for directory, expected in sorted(directories.items(), key=lambda item: str(item[0])):
-        yield directory, expected
-
-
-def iter_orphaned_skill_links(
-    ctx: dict[str, Any], roots: dict[str, Path]
-) -> Iterator[tuple[Path, Path]]:
-    repo_skills = (ctx["repo"] / "skills").resolve(strict=False)
-    for directory, expected in skill_prune_directories(ctx, roots):
-        if not directory.is_dir():
-            continue
-        for entry in sorted(directory.iterdir(), key=lambda item: item.name):
-            if not entry.is_symlink() or entry.name in expected:
+        for entry in sorted(managed.path.iterdir(), key=lambda item: item.name):
+            if not entry.is_symlink() or entry.name in managed.expected_entries:
                 continue
             try:
                 destination = entry.resolve(strict=False)
@@ -217,11 +47,9 @@ def iter_orphaned_skill_links(
                 yield entry, destination
 
 
-def prune_skill_links(
-    ctx: dict[str, Any], roots: dict[str, Path], dry_run: bool
-) -> list[StatusCheck]:
+def prune_skill_links(projection: MachineProjection, dry_run: bool) -> list[StatusCheck]:
     checks = []
-    for link, destination in iter_orphaned_skill_links(ctx, roots):
+    for link, destination in iter_orphaned_skill_links(projection):
         if not dry_run:
             link.unlink()
         verb = "would remove" if dry_run else "remove"
@@ -236,58 +64,10 @@ def prune_skill_links(
     return checks
 
 
-def read_instruction_source(directory: Path, agent: str) -> str | None:
-    parts = []
-    for path in (directory / "base.md", directory / f"{agent}.md"):
-        if path.is_file():
-            parts.append(path.read_text(encoding="utf-8").rstrip("\n"))
-    if not parts:
-        return None
-    return "\n\n".join(parts)
-
-
-def iter_instruction_targets(
-    ctx: dict[str, Any], roots: dict[str, Path]
-) -> Iterator[dict[str, Any]]:
-    agents_path = ctx["paths"]["agents"]
-    for agent, settings in sorted(ctx["agents"].items()):
-        template = settings.get("instructions_global")
-        if template:
-            content = read_instruction_source(ctx["repo"] / "instructions" / "global", agent)
-            if content is not None:
-                yield {
-                    "agent": agent,
-                    "project": None,
-                    "content": content,
-                    "target": format_target(template, agents_path, agent, "instructions_global"),
-                }
-
-        template = settings.get("instructions_project")
-        if not template:
-            continue
-        for project, root in sorted(roots.items()):
-            content = read_instruction_source(
-                ctx["repo"] / "instructions" / "projects" / project, agent
-            )
-            if content is not None:
-                yield {
-                    "agent": agent,
-                    "project": project,
-                    "content": content,
-                    "target": format_target(
-                        template,
-                        agents_path,
-                        agent,
-                        "instructions_project",
-                        project_root=root,
-                    ),
-                }
-
-
-def target_label(item: dict[str, Any]) -> str:
-    scope = "global" if item.get("project") is None else f"project {item['project']}"
-    name = f"/{item['name']}" if item.get("name") else ""
-    return f"{item['agent']} {scope}{name}: {item['target']}"
+def target_label(item: SkillTarget | InstructionTarget) -> str:
+    scope = "global" if item.project is None else f"project {item.project}"
+    name = f"/{item.name}" if isinstance(item, SkillTarget) else ""
+    return f"{item.agent} {scope}{name}: {item.target}"
 
 
 # ----------------------------------------------------------------------- files
@@ -464,19 +244,19 @@ class SyncReport(Report):
 
 # ----------------------------------------------------------------------- apply
 
-def skill_fields(item: dict[str, Any]) -> dict[str, Any]:
+def skill_fields(item: SkillTarget) -> dict[str, Any]:
     return {
         "kind": "skill",
-        "agent": item["agent"],
-        "project": item["project"],
-        "name": item["name"],
-        "target": str(item["target"]),
+        "agent": item.agent,
+        "project": item.project,
+        "name": item.name,
+        "target": str(item.target),
     }
 
 
-def apply_symlink(item: dict[str, Any], dry_run: bool) -> StatusCheck:
-    source: Path = item["source"]
-    target: Path = item["target"]
+def apply_symlink(item: SkillTarget, dry_run: bool) -> StatusCheck:
+    source = item.source
+    target = item.target
     label = target_label(item)
     fields = skill_fields(item)
     if same_symlink(target, source):
@@ -519,9 +299,9 @@ def remove_extra_copy_paths(source: Path, target: Path) -> None:
             shutil.rmtree(path)
 
 
-def apply_copy(item: dict[str, Any], dry_run: bool) -> StatusCheck:
-    source: Path = item["source"]
-    target: Path = item["target"]
+def apply_copy(item: SkillTarget, dry_run: bool) -> StatusCheck:
+    source = item.source
+    target = item.target
     label = target_label(item)
     fields = skill_fields(item)
     if target.is_dir() and not target.is_symlink() and tree_hashes(source) == tree_hashes(target):
@@ -538,13 +318,13 @@ def apply_copy(item: dict[str, Any], dry_run: bool) -> StatusCheck:
     return StatusCheck(level="copy", text=f"{label} <- {source}", **fields)
 
 
-def apply_instruction(item: dict[str, Any], dry_run: bool) -> StatusCheck:
-    target: Path = item["target"]
+def apply_instruction(item: InstructionTarget, dry_run: bool) -> StatusCheck:
+    target = item.target
     label = target_label(item)
     fields = {
         "kind": "instruction",
-        "agent": item["agent"],
-        "project": item["project"],
+        "agent": item.agent,
+        "project": item.project,
         "target": str(target),
     }
     if target.is_symlink() and not target.exists():
@@ -555,7 +335,7 @@ def apply_instruction(item: dict[str, Any], dry_run: bool) -> StatusCheck:
         existing = read_text_preserving_newlines(target)
     else:
         existing = None
-    rendered, malformed = render_managed(existing, item["content"])
+    rendered, malformed = render_managed(existing, item.content)
     if malformed:
         return StatusCheck(
             level="DRIFT", text=f"{label} has malformed or duplicate managed markers", **fields
@@ -569,23 +349,27 @@ def apply_instruction(item: dict[str, Any], dry_run: bool) -> StatusCheck:
     return StatusCheck(level="render", text=label, **fields)
 
 
-def apply_report(ctx: dict[str, Any], dry_run: bool = False) -> ApplyReport:
+def apply_report(projection: MachineProjection, dry_run: bool = False) -> ApplyReport:
     """Deploy every managed target and return the structured result."""
-    roots, skipped = project_roots(ctx)
     checks: list[StatusCheck] = [
-        StatusCheck(kind="project", level="skip", text=message) for message in skipped
+        StatusCheck(
+            kind="project",
+            level="skip",
+            text=f"project {project.name}: {project.reason}",
+        )
+        for project in projection.projects
+        if not project.available
     ]
-    checks.extend(prune_skill_links(ctx, roots, dry_run))
-    for item in iter_skill_targets(ctx, roots):
-        applier = apply_copy if item["mode"] == "copy" else apply_symlink
-        checks.append(applier(item, dry_run))
-    for item in iter_instruction_targets(ctx, roots):
+    checks.extend(prune_skill_links(projection, dry_run))
+    for item in projection.skill_targets:
+        checks.append(SKILL_APPLIERS[item.mode](item, dry_run))
+    for item in projection.instruction_targets:
         checks.append(apply_instruction(item, dry_run))
     problems = sum(1 for check in checks if check.level in PROBLEM_LEVELS)
     return ApplyReport(
-        machine_id=ctx["machine_id"],
-        hostname=ctx["hostname"],
-        repo=str(ctx["repo"]),
+        machine_id=projection.machine_id,
+        hostname=projection.hostname,
+        repo=str(projection.repo),
         checks=tuple(checks),
         exit_code=1 if problems else 0,
         dry_run=dry_run,
@@ -606,9 +390,9 @@ def apply_error_report(
     )
 
 
-def apply_context(ctx: dict[str, Any], dry_run: bool = False) -> int:
+def apply_projection(projection: MachineProjection, dry_run: bool = False) -> int:
     """Print the apply report the way the CLI does and return its exit code."""
-    report = apply_report(ctx, dry_run=dry_run)
+    report = apply_report(projection, dry_run=dry_run)
     for check in report.checks:
         print(f"[{check.level}] {check.text}")
     return report.exit_code
@@ -616,26 +400,31 @@ def apply_context(ctx: dict[str, Any], dry_run: bool = False) -> int:
 
 # ---------------------------------------------------------------------- status
 
-def check_skill(item: dict[str, Any]) -> StatusCheck:
-    source: Path = item["source"]
-    target: Path = item["target"]
+def check_copy_skill(item: SkillTarget) -> StatusCheck:
+    source = item.source
+    target = item.target
     label = target_label(item)
     fields = skill_fields(item)
-    if item["mode"] == "copy":
-        if not target.exists() and not target.is_symlink():
-            return StatusCheck(level="MISSING", text=label, **fields)
-        if target.is_symlink() or not target.is_dir():
-            return StatusCheck(
-                level="DRIFT",
-                text=f"{label} is not a regular directory for copy mode",
-                **fields,
-            )
-        if tree_hashes(source) != tree_hashes(target):
-            return StatusCheck(
-                level="DRIFT", text=f"{label} differs from repository content", **fields
-            )
-        return StatusCheck(level="ok", text=label, **fields)
+    if not target.exists() and not target.is_symlink():
+        return StatusCheck(level="MISSING", text=label, **fields)
+    if target.is_symlink() or not target.is_dir():
+        return StatusCheck(
+            level="DRIFT",
+            text=f"{label} is not a regular directory for copy mode",
+            **fields,
+        )
+    if tree_hashes(source) != tree_hashes(target):
+        return StatusCheck(
+            level="DRIFT", text=f"{label} differs from repository content", **fields
+        )
+    return StatusCheck(level="ok", text=label, **fields)
 
+
+def check_symlink_skill(item: SkillTarget) -> StatusCheck:
+    source = item.source
+    target = item.target
+    label = target_label(item)
+    fields = skill_fields(item)
     if same_symlink(target, source):
         return StatusCheck(level="ok", text=label, **fields)
     if target.is_symlink():
@@ -651,13 +440,21 @@ def check_skill(item: dict[str, Any]) -> StatusCheck:
     return StatusCheck(level="MISSING", text=label, **fields)
 
 
-def check_instruction(item: dict[str, Any]) -> StatusCheck:
-    target: Path = item["target"]
+SKILL_APPLIERS = {"copy": apply_copy, "symlink": apply_symlink}
+SKILL_CHECKERS = {"copy": check_copy_skill, "symlink": check_symlink_skill}
+
+
+def check_skill(item: SkillTarget) -> StatusCheck:
+    return SKILL_CHECKERS[item.mode](item)
+
+
+def check_instruction(item: InstructionTarget) -> StatusCheck:
+    target = item.target
     label = target_label(item)
     fields = {
         "kind": "instruction",
-        "agent": item["agent"],
-        "project": item["project"],
+        "agent": item.agent,
+        "project": item.project,
         "name": None,
         "target": str(target),
     }
@@ -666,7 +463,7 @@ def check_instruction(item: dict[str, Any]) -> StatusCheck:
     if not target.is_file():
         return StatusCheck(level="DRIFT", text=f"{label} is not a regular file", **fields)
     existing = read_text_preserving_newlines(target)
-    rendered, malformed = render_managed(existing, item["content"])
+    rendered, malformed = render_managed(existing, item.content)
     if malformed or BEGIN_MARKER not in existing or END_MARKER not in existing:
         return StatusCheck(
             level="STALE", text=f"{label} has missing or malformed managed markers", **fields
@@ -717,13 +514,18 @@ def check_git(repo: Path) -> list[StatusCheck]:
     return checks
 
 
-def status_report(ctx: dict[str, Any]) -> StatusReport:
+def status_report(projection: MachineProjection) -> StatusReport:
     """Inspect projects, managed targets, and git, and return the structured result."""
-    roots, skipped = project_roots(ctx)
     checks: list[StatusCheck] = [
-        StatusCheck(kind="project", level="skip", text=message) for message in skipped
+        StatusCheck(
+            kind="project",
+            level="skip",
+            text=f"project {project.name}: {project.reason}",
+        )
+        for project in projection.projects
+        if not project.available
     ]
-    for link, destination in iter_orphaned_skill_links(ctx, roots):
+    for link, destination in iter_orphaned_skill_links(projection):
         checks.append(
             StatusCheck(
                 kind="orphan",
@@ -732,14 +534,14 @@ def status_report(ctx: dict[str, Any]) -> StatusReport:
                 target=str(link),
             )
         )
-    checks.extend(check_skill(item) for item in iter_skill_targets(ctx, roots))
-    checks.extend(check_instruction(item) for item in iter_instruction_targets(ctx, roots))
-    checks.extend(check_git(ctx["repo"]))
+    checks.extend(check_skill(item) for item in projection.skill_targets)
+    checks.extend(check_instruction(item) for item in projection.instruction_targets)
+    checks.extend(check_git(projection.repo))
     problems = sum(1 for check in checks if check.level in PROBLEM_LEVELS)
     return StatusReport(
-        machine_id=ctx["machine_id"],
-        hostname=ctx["hostname"],
-        repo=str(ctx["repo"]),
+        machine_id=projection.machine_id,
+        hostname=projection.hostname,
+        repo=str(projection.repo),
         checks=tuple(checks),
         exit_code=1 if problems else 0,
     )
@@ -758,7 +560,7 @@ def config_error_report(repo: Path, message: str) -> StatusReport:
 
 def status(repo: Path) -> StatusReport:
     """Load the fleet configuration for one Content repository and report status."""
-    return status_report(load_context(repo))
+    return status_report(load_machine_projection(repo))
 
 
 # ------------------------------------------------------------------------ sync
@@ -790,12 +592,12 @@ def git_action(
     return checks, True
 
 
-def sync_report(ctx: dict[str, Any], dry_run: bool = False) -> SyncReport:
+def sync_report(projection: MachineProjection, dry_run: bool = False) -> SyncReport:
     """Commit, pull, apply, and push, then return the structured result."""
-    repo: Path = ctx["repo"]
+    repo = projection.repo
     # The report keeps the identity that made the commit, not the reloaded one.
-    machine_id = ctx["machine_id"]
-    hostname = ctx["hostname"]
+    machine_id = projection.machine_id
+    hostname = projection.hostname
     checks: list[StatusCheck] = []
 
     def report(exit_code: int) -> SyncReport:
@@ -876,7 +678,7 @@ def sync_report(ctx: dict[str, Any], dry_run: bool = False) -> SyncReport:
     # invisible while the new skill directory is already on disk).
     if not dry_run:
         try:
-            ctx = load_context(repo)
+            projection = load_machine_projection(repo)
         except ConfigError as exc:
             checks.append(
                 StatusCheck(
@@ -888,7 +690,7 @@ def sync_report(ctx: dict[str, Any], dry_run: bool = False) -> SyncReport:
             )
             return report(1)
 
-    applied = apply_report(ctx, dry_run=dry_run)
+    applied = apply_report(projection, dry_run=dry_run)
     checks.extend(applied.checks)
 
     push_ok = True
@@ -931,20 +733,20 @@ def skill_check(level: str, text: str, **fields: Any) -> StatusCheck:
 
 
 def build_skill_report(
-    cls: type[SkillReportT], ctx: dict[str, Any], *checks: StatusCheck
+    cls: type[SkillReportT], projection: MachineProjection, *checks: StatusCheck
 ) -> SkillReportT:
     problems = sum(1 for check in checks if check.level in PROBLEM_LEVELS)
     return cls(
-        machine_id=ctx["machine_id"],
-        hostname=ctx["hostname"],
-        repo=str(ctx["repo"]),
+        machine_id=projection.machine_id,
+        hostname=projection.hostname,
+        repo=str(projection.repo),
         checks=checks,
         exit_code=1 if problems else 0,
     )
 
 
 def skill_destination(
-    ctx: dict[str, Any], name: str, project: str | None, action: str
+    projection: MachineProjection, name: str, project: str | None, action: str
 ) -> tuple[Path | None, StatusCheck | None]:
     """The repository directory for a named skill, or the check that rejects it."""
     try:
@@ -952,27 +754,32 @@ def skill_destination(
     except ValueError as exc:
         return None, skill_check("ERROR", str(exc), name=name, project=project)
     if project is None:
-        return ctx["repo"] / "skills" / "global" / name, None
-    if project not in ctx["projects"]:
+        return projection.repo / "skills" / "global" / name, None
+    if not projection.has_project(project):
         return None, skill_check(
             "ERROR",
-            f"{ctx['paths']['projects']}: key '{project}' is missing; "
+            f"{projection.projects_config_path}: key '{project}' is missing; "
             f"add the project before {action}",
             name=name,
             project=project,
         )
-    return ctx["repo"] / "skills" / "projects" / project / name, None
+    return projection.repo / "skills" / "projects" / project / name, None
 
 
-def add_skill_report(ctx: dict[str, Any], name: str, project: str | None) -> AddSkillReport:
+def add_skill_report(
+    projection: MachineProjection, name: str, project: str | None
+) -> AddSkillReport:
     """Create a skill skeleton and return the structured result."""
 
     def report(*checks: StatusCheck) -> AddSkillReport:
-        return build_skill_report(AddSkillReport, ctx, *checks)
+        return build_skill_report(AddSkillReport, projection, *checks)
 
-    destination, rejected = skill_destination(ctx, name, project, "creating a project skill")
+    destination, rejected = skill_destination(
+        projection, name, project, "creating a project skill"
+    )
     if rejected is not None:
         return report(rejected)
+    assert destination is not None
     fields = {"name": destination.name, "project": project, "target": str(destination)}
     if destination.exists() or destination.is_symlink():
         return report(skill_check("ERROR", f"skill already exists: {destination}", **fields))
@@ -983,12 +790,15 @@ def add_skill_report(ctx: dict[str, Any], name: str, project: str | None) -> Add
 
 
 def adopt_skill_report(
-    ctx: dict[str, Any], path_value: str, project: str | None, explicit_name: str | None
+    projection: MachineProjection,
+    path_value: str,
+    project: str | None,
+    explicit_name: str | None,
 ) -> AdoptReport:
     """Move an existing skill into the Content repository and return the structured result."""
 
     def report(*checks: StatusCheck) -> AdoptReport:
-        return build_skill_report(AdoptReport, ctx, *checks)
+        return build_skill_report(AdoptReport, projection, *checks)
 
     source = expand_path(path_value)
     if source.is_symlink() or not source.exists() or not source.is_dir():
@@ -1001,10 +811,11 @@ def adopt_skill_report(
         )
     source = source.resolve()
     destination, rejected = skill_destination(
-        ctx, explicit_name or source.name, project, "adopting a project skill"
+        projection, explicit_name or source.name, project, "adopting a project skill"
     )
     if rejected is not None:
         return report(rejected)
+    assert destination is not None
     fields = {"name": destination.name, "project": project, "target": str(destination)}
     if destination.exists() or destination.is_symlink():
         return report(
