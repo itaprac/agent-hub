@@ -369,6 +369,7 @@ def load_machine_projection(repo: Path) -> MachineProjection:
     skill_targets = []
     instruction_targets = []
     managed: dict[Path, set[str]] = {}
+    skill_sources = skill_directories(repo / "skills/global")
     for agent in agents:
         if agent.skills_global and not agent.universal:
             directory = Path(agent.skills_global)
@@ -381,7 +382,7 @@ def load_machine_projection(repo: Path) -> MachineProjection:
                     directory / source.name,
                     agent.mode,
                 )
-                for source in skill_directories(repo / "skills/global")
+                for source in skill_sources
                 if _skill_is_selected(
                     settings["skills"], machine_id, source.name, agent.name
                 )

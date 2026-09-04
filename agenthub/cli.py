@@ -54,14 +54,16 @@ def main(argv: list[str] | None = None) -> int:
         report: core.Report
         if args.command == "apply":
             report = content_operations.apply(dry_run=args.dry_run)
-        if args.command == "status":
+        elif args.command == "status":
             report = content_operations.status()
-        if args.command == "sync":
+        elif args.command == "sync":
             report = content_operations.sync(dry_run=args.dry_run)
-        if args.command == "add-skill":
+        elif args.command == "add-skill":
             report = content_operations.add_skill(args.name, args.project)
-        if args.command == "adopt":
+        elif args.command == "adopt":
             report = content_operations.adopt(args.path, args.project, args.name)
+        else:
+            parser.error(f"unsupported command: {args.command}")
         return print_report(report, errors_to_stderr=not report.machine_id)
     except ConfigError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)

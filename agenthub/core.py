@@ -705,8 +705,7 @@ def skill_destination(
     if not projection.has_project(project):
         return None, skill_check(
             "ERROR",
-            f"{projection.projects_config_path}: key '{project}' is missing; "
-            f"add the project before {action}",
+            f"project '{project}': project skills are not available in this version",
             name=name,
             project=project,
         )
