@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { api } from "../web/js/api.js";
 import { adoptProjectField, projectField } from "../web/js/modals.js";
 
-import { createFleetController, machineState, recordAge } from "../web/js/fleet.js";
+import { createFleetController, machineState, recordAge, renderFleet } from "../web/js/fleet.js";
 import { createSettingsController } from "../web/js/settings.js";
 import { createUsageController } from "../web/js/usage.js";
 import { buildInstructionsTree, buildConfigTree, skillProvenance } from "../web/js/workspace.js";
@@ -249,5 +249,61 @@ assert.deepEqual(installPayloads, [
   { url: "/api/run", payload: { command: "apply", dry_run: true } },
 ]);
 assert.equal(api.peerRun, undefined);
+console.log("PASS");
+console.log("== 8. Fleet counts records, shows first-sync guidance, and keeps actions local ==");
+// A small DOM stand-in exercises the rendered cards, not a parallel summary model.
+class FleetNode {
+  constructor(tag) {
+    this.tag = tag;
+    this.children = [];
+    this.className = "";
+    this.textContent = "";
+    this.disabled = false;
+    this.classList = { toggle() {} };
+  }
+  append(child) { this.children.push(child); }
+  get firstChild() { return this.children[0]; }
+  removeChild(child) { this.children.splice(this.children.indexOf(child), 1); }
+  setAttribute(name, value) { this[name] = value; }
+  addEventListener() {}
+}
+const oldDocument = globalThis.document;
+const oldNode = globalThis.Node;
+const panelNodes = new Map(["fleet", "fleet-verdict", "fleet-verdict-text", "fleet-meta", "fleet-grid"]
+  .map((id) => [`#${id}`, new FleetNode("div")]));
+globalThis.Node = FleetNode;
+globalThis.document = {
+  querySelector: (selector) => panelNodes.get(selector),
+  createElement: (tag) => new FleetNode(tag),
+  createTextNode: (text) => Object.assign(new FleetNode("text"), { textContent: text }),
+};
+const descendants = (node) => [node, ...node.children.flatMap(descendants)];
+const renderedText = (node) => descendants(node).map((child) => child.textContent).join(" ");
+const emptyFleet = { busy: 0, fleetLoading: false, fleet: { machine_id: "mini", machines: [] } };
+try {
+  renderFleet(emptyFleet);
+  assert.equal(panelNodes.get("#fleet-verdict-text").textContent, "0/0 current");
+  assert.match(renderedText(panelNodes.get("#fleet-grid")), /No Machine records yet. Run sync/);
+  let cards = panelNodes.get("#fleet-grid").children.filter((node) => node.tag === "article");
+  assert.equal(cards.length, 1);
+  assert.match(cards[0].className, /is-local/);
+  assert.deepEqual(descendants(cards[0]).filter((node) => node.tag === "button")
+    .map((node) => [renderedText(node).trim(), node.disabled]), [["Sync", false], ["Apply", false]]);
+  assert.equal(descendants(cards[0]).filter((node) => node.type === "checkbox").length, 1);
+
+  const remote = { machine: "laptop", local: false, current: true, problems: 0, age_seconds: 60 };
+  renderFleet({ ...emptyFleet, fleet: { machine_id: "mini", machines: [remote] } });
+  assert.equal(panelNodes.get("#fleet-verdict-text").textContent, "1/1 current");
+  assert.equal(panelNodes.get("#fleet-verdict").className, "pill pill-ok");
+  assert.doesNotMatch(renderedText(panelNodes.get("#fleet-grid")), /No Machine records yet/);
+  cards = panelNodes.get("#fleet-grid").children.filter((node) => node.tag === "article");
+  assert.equal(cards.length, 2);
+  const remoteCard = cards.find((node) => !node.className.includes("is-local"));
+  assert.match(renderedText(remoteCard), /laptop/);
+  assert.equal(descendants(remoteCard).filter((node) => ["button", "input"].includes(node.tag)).length, 0);
+} finally {
+  if (oldDocument === undefined) delete globalThis.document; else globalThis.document = oldDocument;
+  if (oldNode === undefined) delete globalThis.Node; else globalThis.Node = oldNode;
+}
 console.log("PASS");
 console.log("WEB STATE TEST PASSED");

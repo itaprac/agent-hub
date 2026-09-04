@@ -132,24 +132,25 @@ export function renderFleet(snapshot) {
   if (!panel) return;
   const view = controller.view({ busy: snapshot.busy, loading: snapshot.fleetLoading });
   panel.classList.toggle("is-loading", Boolean(snapshot.fleetLoading));
-  const machines = [...(snapshot.fleet?.machines || [])];
+  const records = snapshot.fleet?.machines || [];
+  const machines = [...records];
   const localId = snapshot.fleet?.machine_id || snapshot.state?.machine_id;
   if (localId && !machines.some((machine) => machine.local)) {
     machines.unshift({ machine: localId, local: true });
   }
-  const current = machines.filter((machine) => machine.current).length;
-  const hasProblems = machines.some((machine) => machine.error || machine.problems > 0);
-  const tone = snapshot.fleetError || hasProblems ? "bad" : machines.length && current === machines.length ? "ok" : "idle";
+  const current = records.filter((machine) => machine.current).length;
+  const hasProblems = records.some((machine) => machine.error || machine.problems > 0);
+  const tone = snapshot.fleetError || hasProblems ? "bad" : records.length && current === records.length ? "ok" : "idle";
   const pill = $("#fleet-verdict");
   pill.className = `pill pill-${tone}`;
   pill.title = "Recorded Store revisions; these cards do not query other machines";
-  $("#fleet-verdict-text").textContent = snapshot.fleetLoading ? "Loading" : `${current}/${machines.length} current`;
+  $("#fleet-verdict-text").textContent = snapshot.fleetLoading ? "Loading" : `${current}/${records.length} current`;
   $("#fleet-meta").textContent = snapshot.fleetLoading ? "loading…" : snapshot.fleet?.at || "";
   const grid = clear($("#fleet-grid"));
   if (snapshot.fleetError) grid.append(el("div", {
     class: "fleet-error fleet-error-block", role: "alert", text: `Fleet unavailable: ${snapshot.fleetError}`,
   }));
-  if (!machines.length && !snapshot.fleetError) grid.append(el("div", {
+  if (!records.length && !snapshot.fleetError) grid.append(el("div", {
     class: "tree-empty", text: snapshot.fleetLoading ? "Loading Machine records…" : "No Machine records yet. Run sync to create this machine’s record.",
   }));
   for (const machine of machines) grid.append(card(machine, view));
