@@ -51,6 +51,8 @@ def build_parser() -> argparse.ArgumentParser:
     commands = {}
     for name, help_text in (
         ("init", "create the Store and adopt existing Skills"),
+        ("migrate", "convert a v1 repository to the Store layout"),
+        ("project", "link private Project skills"),
         ("apply", "link Skills and render instructions"),
         ("status", "report filesystem and Git drift"),
         ("sync", "commit, pull, apply, and push"),
@@ -69,8 +71,17 @@ def build_parser() -> argparse.ArgumentParser:
     commands["add-skill"].add_argument("name")
     commands["add-skill"].add_argument("--project")
     commands["adopt"].add_argument("path")
-    commands["adopt"].add_argument("--project")
+    commands["adopt"].add_argument("--project", action="store_true")
     commands["adopt"].add_argument("--name")
+    commands["migrate"].add_argument("path", type=Path)
+    project_commands = commands["project"].add_subparsers(
+        dest="project_command", required=True
+    )
+    link = project_commands.add_parser(
+        "link", help="record a project and link its Skills"
+    )
+    _options(link, child=True)
+    link.add_argument("path", nargs="?", default=".", type=Path)
     return parser
 
 
@@ -80,10 +91,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run and args.command not in {"apply", "sync"}:
         parser.error("--dry-run is supported only by apply and sync")
     try:
-        repo = resolve_repo(args.store, create=args.command == "init")
+        repo = resolve_repo(
+            args.path if args.command == "migrate" else args.store,
+            create=args.command == "init",
+        )
         store = operations.ContentOperations(repo)
         report: core.Report
-        if args.command == "init":
+        if args.command == "migrate":
+            report = store.migrate()
+        elif args.command == "project":
+            report = store.project_link(args.path)
+        elif args.command == "init":
             report = store.init(
                 from_url=args.from_url, remote=args.remote, yes=args.yes
             )

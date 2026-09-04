@@ -37,7 +37,7 @@ def test_add_skill_rejects_an_unknown_project(content: Path, home: Path) -> None
     [check] = report.checks
     assert check.level == "ERROR"
     assert "nope" in check.text
-    assert not (content / "skills" / "projects" / "nope").exists()
+    assert not (content / "projects" / "nope").exists()
 
 
 def test_add_skill_rejects_a_duplicate(content: Path, home: Path) -> None:

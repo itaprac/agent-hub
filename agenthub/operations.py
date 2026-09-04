@@ -51,6 +51,18 @@ class ContentOperations:
         with _serialized():
             return init_store(self.repo, from_url=from_url, remote=remote, yes=yes)
 
+    def migrate(self) -> core.Report:
+        from .migration import migrate
+
+        with _serialized():
+            return migrate(self.repo)
+
+    def project_link(self, path: Path) -> core.Report:
+        from .projects import link_project
+
+        with _serialized():
+            return link_project(self.repo, path)
+
     def status(self, *, fleet: bool = False) -> core.StatusReport:
         return self._report(
             core.StatusReport, lambda projection: _status(projection, fleet)
@@ -112,7 +124,7 @@ class ContentOperations:
     def adopt(
         self,
         path: str,
-        project: str | None = None,
+        project: bool | None = None,
         name: str | None = None,
     ) -> core.AdoptReport:
         return self._report(
@@ -253,7 +265,13 @@ def _state(projection: config.MachineProjection) -> dict[str, Any]:
         "repo": str(repo),
         "agents": agents,
         "projects": projects,
-        "skills": {"global": _skills(repo / "skills", repo), "projects": {}},
+        "skills": {
+            "global": _skills(repo / "skills", repo),
+            "projects": {
+                project.name: _skills(repo / "projects" / project.name / "skills", repo)
+                for project in projection.projects
+            },
+        },
         "instructions": {
             "global": [
                 {
@@ -309,7 +327,12 @@ def _status(
         age = f"{int(seconds)}s ago" if seconds is not None else "unknown"
         local = machine["local"]
         problems = machine["problems"]
-        bad = not current or bool(problems) or bool(machine.get("error")) or bool(machine.get("status", {}).get("exit_code", 0))
+        bad = (
+            not current
+            or bool(problems)
+            or bool(machine.get("error"))
+            or bool(machine.get("status", {}).get("exit_code", 0))
+        )
         local_problem |= local and bad
         text = f"{machine['machine']}: {state}; {problems} problems; synced {age}"
         if local:
