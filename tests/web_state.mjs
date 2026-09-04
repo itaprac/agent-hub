@@ -2,6 +2,8 @@
 // Node only; local stand-ins isolate controllers from the DOM and backend.
 
 import assert from "node:assert/strict";
+import { api } from "../web/js/api.js";
+import { adoptProjectField, projectField } from "../web/js/modals.js";
 
 import { createPeersController } from "../web/js/peers.js";
 import { createSettingsController } from "../web/js/settings.js";
@@ -154,4 +156,31 @@ assert.deepEqual(peersController.view(), {
 assert.equal(peerViews.some((view) => view.running?.machine === "mini"), true);
 console.log("PASS");
 
+console.log("== 4. Skill forms send checkout paths and boolean adoption scope ==");
+const projectChoice = projectField([
+  { name: "example.com--team--project", path: "/tmp/project", available: true },
+  { name: "missing-project", path: "/tmp/missing", available: false },
+]);
+assert.deepEqual(projectChoice.options.map((option) => option.value), ["", "/tmp/project"]);
+const adoptChoice = adoptProjectField();
+assert.deepEqual(adoptChoice.options.map((option) => option.value), ["", "project"]);
+const originalFetch = globalThis.fetch;
+const payloads = [];
+globalThis.fetch = async (url, options) => {
+  payloads.push({ url, payload: JSON.parse(options.body) });
+  return { ok: true, headers: { get: () => "application/json" }, json: async () => ({ exit_code: 0 }) };
+};
+try {
+  await api.addSkill("private", projectChoice.options[1].value);
+  await api.adopt("/tmp/local", adoptChoice.options[0].value, "");
+  await api.adopt("/tmp/project/local", adoptChoice.options[1].value, "renamed");
+} finally {
+  globalThis.fetch = originalFetch;
+}
+assert.deepEqual(payloads, [
+  { url: "/api/add-skill", payload: { name: "private", project: "/tmp/project" } },
+  { url: "/api/adopt", payload: { path: "/tmp/local", project: false, name: null } },
+  { url: "/api/adopt", payload: { path: "/tmp/project/local", project: true, name: "renamed" } },
+]);
+console.log("PASS");
 console.log("WEB STATE TEST PASSED");

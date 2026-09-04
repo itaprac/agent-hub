@@ -164,9 +164,9 @@ def exclude_paths(checkout: Path, paths: list[Path], dry_run: bool = False) -> l
     checkout = project_root(checkout)
     destination = _exclude_file(checkout)
     existing = destination.read_bytes() if destination.exists() else b""
-    text = existing.decode("utf-8")
+    existing_lines = set(existing.splitlines())
     patterns = sorted({_exclude_pattern(checkout, path) for path in paths})
-    additions = [pattern for pattern in patterns if pattern not in text.splitlines()]
+    additions = [pattern for pattern in patterns if pattern.encode("utf-8") not in existing_lines]
     if not additions:
         return []
     if not dry_run:

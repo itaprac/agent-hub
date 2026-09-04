@@ -187,9 +187,9 @@ def test_changed_origin_does_not_deploy_another_projects_skills(content: Path, c
     assert not link.exists()
 
 
-def test_exclude_preserves_existing_bytes_and_escapes_literal_paths(checkout: Path) -> None:
+@pytest.mark.parametrize("original", [b"# custom notes\r\n*.tmp\r\n", b"# legacy \xff\r\n*.tmp\r\n"])
+def test_exclude_preserves_existing_bytes_and_escapes_literal_paths(checkout: Path, original: bytes) -> None:
     exclude = checkout / ".git" / "info" / "exclude"
-    original = b"# custom notes\r\n*.tmp\r\n"
     exclude.write_bytes(original)
     path = checkout / "custom [skill]" / "with spaces"
     write(path / "SKILL.md", "private\n")
