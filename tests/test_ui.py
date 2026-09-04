@@ -132,3 +132,16 @@ def test_service_can_be_removed_or_inspected_when_store_is_missing(tmp_path, hom
     assert cli.main(["--store", str(missing), *args]) == 0
     assert calls == [(action, missing)]
     assert not missing.exists()
+
+
+@pytest.mark.parametrize("arguments", [["timer", "on"], ["ui", "--service", "on"]])
+def test_enabling_service_with_missing_store_explains_init(tmp_path, monkeypatch, capsys, arguments):
+    from agenthub import services
+
+    def forbidden_service(*args):
+        raise AssertionError("missing Store must fail before service changes")
+
+    monkeypatch.setattr(services, "timer", forbidden_service)
+    monkeypatch.setattr(services, "ui_service", forbidden_service)
+    assert cli.main(["--store", str(tmp_path / "missing"), *arguments]) == 2
+    assert "agent-hub init" in capsys.readouterr().err

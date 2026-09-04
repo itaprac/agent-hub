@@ -105,8 +105,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         repo = resolve_repo(
             args.path if args.command == "migrate" else args.store,
-            create=args.command in {"init", "timer"}
-            or (args.command == "ui" and args.service is not None),
+            create=args.command == "init"
+            or (args.command == "timer" and args.action in {"off", "status"})
+            or (args.command == "ui" and args.service in {"off", "status"}),
         )
         if args.command == "ui" and args.service is None:
             from . import webapp

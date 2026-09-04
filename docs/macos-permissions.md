@@ -27,6 +27,7 @@ python3 - <<'PY'
 from pathlib import Path
 import plistlib
 import shlex
+import shutil
 
 for label in ("com.agenthub.sync", "com.agenthub.web"):
     path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
@@ -39,8 +40,12 @@ for label in ("com.agenthub.sync", "com.agenthub.web"):
     with executable.open("rb") as handle:
         first_line = handle.readline().decode("utf-8", errors="replace").strip()
     if first_line.startswith("#!"):
-        interpreter = shlex.split(first_line[2:])[0]
-        print(f"  interpreter: {Path(interpreter).resolve()}")
+        words = shlex.split(first_line[2:])
+        if words:
+            interpreter = words[0]
+            if Path(interpreter).name == "env" and len(words) > 1:
+                interpreter = shutil.which(words[1], path=job.get("EnvironmentVariables", {}).get("PATH"))
+            print(f"  interpreter: {Path(interpreter).resolve() if interpreter else 'not found on service PATH'}")
     print(f"  errors: {job.get('StandardErrorPath', 'not configured')}")
 PY
 ```
