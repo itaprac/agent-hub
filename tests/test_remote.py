@@ -271,7 +271,9 @@ def test_duplicate_config_keys_and_symlinked_config_are_rejected(home, ssh):
 def test_check_verifies_identity_without_requesting_a_write(home, ssh, code):
     configure(home)
     ssh[1].append(report(code=code))
-    assert remote.check("remote-machine") is None
+    checked = remote.check("remote-machine")
+    assert checked.machine == "remote-machine"
+    assert checked.target == remote.RemoteTarget(**TARGET)
     assert len(ssh[0]) == 1
     assert shlex.split(ssh[0][0][0][-1])[3:] == ["status", "--json"]
 
@@ -283,3 +285,55 @@ def test_check_rejects_wrong_identity_and_configuration_errors(home, ssh, status
     with pytest.raises(remote.RemoteError):
         remote.check("remote-machine")
     assert len(ssh[0]) == 1
+
+
+@pytest.mark.parametrize("command,dry_run", [("apply", False), ("sync", True)])
+def test_checked_target_runs_without_a_second_preflight(home, ssh, command, dry_run):
+    configure(home)
+    expected = report(f"--dry-run {command}" if dry_run else command)
+    ssh[1].extend([report(), expected])
+    checked = remote.check("remote-machine")
+    # The local operation must use exactly the target whose identity was checked.
+    configure(home, {**TARGET, "destination": "changed.example"})
+    result = remote.run("remote-machine", command, dry_run, checked_target=checked)
+    assert result == expected
+    assert len(ssh[0]) == 2
+    assert [shlex.split(call[0][-1])[3] for call in ssh[0]] == ["status", command]
+    assert all(call[0][-2] == TARGET["destination"] for call in ssh[0])
+
+
+def test_checked_target_cannot_be_used_for_another_machine(home, ssh):
+    configure(home)
+    ssh[1].append(report())
+    checked = remote.check("remote-machine")
+    with pytest.raises(remote.RemoteError, match="does not match"):
+        remote.run("other-machine", "sync", checked_target=checked)
+    assert len(ssh[0]) == 1
+
+
+@pytest.mark.parametrize(
+    "machine,command,dry_run",
+    [
+        ("INVALID", "sync", False),
+        ("remote-machine", "install", False),
+        ("remote-machine", "sync", "false"),
+    ],
+)
+def test_checked_target_still_validates_operation_inputs(
+    home, ssh, machine, command, dry_run
+):
+    configure(home)
+    ssh[1].append(report())
+    checked = remote.check("remote-machine")
+    with pytest.raises(remote.RemoteError):
+        remote.run(machine, command, dry_run, checked_target=checked)
+    assert len(ssh[0]) == 1
+
+
+def test_checked_target_still_validates_remote_result_identity(home, ssh):
+    configure(home)
+    ssh[1].extend([report(), report("apply", machine="other-machine")])
+    checked = remote.check("remote-machine")
+    with pytest.raises(remote.RemoteError, match="Machine ID"):
+        remote.run("remote-machine", "apply", checked_target=checked)
+    assert len(ssh[0]) == 2

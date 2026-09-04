@@ -91,7 +91,7 @@ class ContentOperations:
                 raise remote.RemoteError("remote Machine is not configured")
             if command not in {"apply", "sync"}:
                 raise remote.RemoteError("remote control supports only Apply and Sync")
-            remote.check(machine)
+            checked_target = remote.check(machine)
             before = None
             if command == "sync" and not dry_run:
                 before = core.sync_report(config.load_machine_projection(self.repo))
@@ -102,7 +102,7 @@ class ContentOperations:
                     result["lines"].append({"level": "ERROR", "text":
                         f"Sync on {machine} was not started: Sync on {local_id} failed"})
                     return result
-            result = remote.run(machine, command, dry_run=dry_run)
+            result = remote.run(machine, command, dry_run=dry_run, checked_target=checked_target)
             result["target_machine"] = machine
             result["remote_started"] = True
             result["remote_exit_code"] = result["exit_code"]

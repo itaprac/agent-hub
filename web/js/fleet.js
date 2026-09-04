@@ -52,7 +52,7 @@ export function createFleetController({ request, publish = () => {}, render = ()
       try {
         const result = await runner(command, dryRun, machine);
         if (result && result.exit_code !== 0) {
-          const problem = result.lines?.find((line) => ["ERROR", "CONFLICT", "DRIFT", "MISSING"].includes(line.level));
+          const problem = result.lines?.find((line) => ["ERROR", "CONFLICT", "DRIFT", "MISSING", "STALE"].includes(line.level));
           change({ errors: new Map(state.errors).set(machine, problem?.text || `${command} failed; see the log.`) });
         }
       } catch (error) {

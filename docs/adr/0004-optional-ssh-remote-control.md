@@ -20,6 +20,11 @@ checks the target Machine ID before any remote mutation. The optional
 Status, Apply, and Sync on one Store. It restricts the source to one Tailscale
 address and disables forwarding and interactive sessions.
 
+For GitHub Origins, optional pairing can create a repository-scoped deploy key
+on the target. This avoids login Keychain access during background SSH commands.
+The target keeps the private key and a backup of its Git config. The GitHub
+account token remains in the operator's credential storage.
+
 Remote Sync first synchronizes the controller Store, then runs Sync on the
 target, then synchronizes the controller again to read the target's record.
 This publishes pending edits before the target pulls them. Errors identify

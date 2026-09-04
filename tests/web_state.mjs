@@ -359,4 +359,19 @@ await new Promise((resolve) => setImmediate(resolve));
 resolveRemoteRefresh({ machines: [] });
 await localRun;
 console.log("PASS");
+console.log("== 10. A stale target report keeps its specific cause on that machine ==");
+const staleController = createFleetController({
+  canRun: (machine) => machine === "macbook",
+  request: async () => ({ machines: [] }),
+});
+const staleCause = "macbook: obsolete skill link remains at ~/.claude/skills/old-skill";
+staleController.setRunner(async () => ({ exit_code: 1, lines: [
+  { level: "ok", text: "local Store published" },
+  { level: "STALE", text: staleCause },
+] }));
+await staleController.run("apply", "macbook");
+assert.equal(staleController.view({ machine: "macbook" }).error, staleCause);
+assert.equal(staleController.view().error, null);
+assert.equal(staleController.view({ machine: "workstation" }).error, null);
+console.log("PASS");
 console.log("WEB STATE TEST PASSED");

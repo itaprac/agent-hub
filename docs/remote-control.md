@@ -23,6 +23,17 @@ only Status, Apply, and Sync on the selected Store, from that controller's
 Tailscale address. Other SSH keys remain intact. Use `--store` for a custom
 Store and `--executable` for a different agent-hub entry point.
 
+For a GitHub Origin on macOS, add `--github-origin`. An SSH session cannot
+always read GitHub credentials from the login Keychain, even when Sync works
+in Terminal. This option uses the local `gh` login to create a write-enabled
+deploy key for this repository only, verifies GitHub's host key through its
+HTTPS API, and changes this Store's Origin to Git over SSH. It backs up the
+local Git config. It does not copy or export the GitHub account token.
+
+Run this option in the target's local Terminal, where `gh` can access the login
+Keychain. The account needs permission to manage deploy keys for the repository.
+Existing custom Git SSH commands and unknown key files cause setup to stop.
+
 On the controller, create `~/.config/agent-hub/remotes.json`, with mode `0600`:
 
 ```json

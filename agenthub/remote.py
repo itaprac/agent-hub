@@ -31,6 +31,14 @@ class RemoteTarget:
     identity_file: str | None = None
 
 
+@dataclass(frozen=True)
+class CheckedTarget:
+    """The target and Machine identity verified before a local operation."""
+
+    machine: str
+    target: RemoteTarget
+
+
 def _machine(value: Any) -> str:
     if not isinstance(value, str) or not MACHINE_PATTERN.fullmatch(value):
         raise RemoteError(
@@ -224,17 +232,31 @@ def _checked_target(machine: str) -> RemoteTarget:
     return target
 
 
-def check(machine: str) -> None:
+def check(machine: str) -> CheckedTarget:
     """Verify remote identity and configuration before any local mutation."""
-    _checked_target(machine)
+    return CheckedTarget(machine=_machine(machine), target=_checked_target(machine))
 
 
-def run(machine: str, command: str, dry_run: bool = False) -> dict[str, Any]:
-    """Verify the target's identity before its first write; never retry SSH."""
+def run(
+    machine: str,
+    command: str,
+    dry_run: bool = False,
+    *,
+    checked_target: CheckedTarget | None = None,
+) -> dict[str, Any]:
+    """Use a prior identity check, or verify it now; never retry SSH."""
     machine = _machine(machine)
     if not isinstance(command, str) or command not in COMMANDS:
         raise RemoteError("Remote commands are limited to apply and sync")
     if type(dry_run) is not bool:
         raise RemoteError("Remote dry_run must be a boolean")
-    target = _checked_target(machine)
+    if checked_target is None:
+        target = _checked_target(machine)
+    elif (
+        not isinstance(checked_target, CheckedTarget)
+        or checked_target.machine != machine
+    ):
+        raise RemoteError("Checked target does not match the requested Machine")
+    else:
+        target = checked_target.target
     return _invoke(target, machine, command, dry_run)

@@ -11,7 +11,9 @@ from test_web_apply import post
 @pytest.fixture
 def configured(monkeypatch):
     monkeypatch.setattr(remote, "configured_machines", lambda: {"macbook"})
-    monkeypatch.setattr(remote, "check", lambda machine: None)
+    checked = object()
+    monkeypatch.setattr(remote, "check", lambda machine: checked)
+    return checked
 
 
 def report(machine="macbook", exit_code=0):
@@ -26,7 +28,8 @@ def test_remote_sync_publishes_then_runs_then_refreshes(server, configured, monk
         calls.append("local")
         return core.SyncReport(projection.machine_id, projection.hostname, str(projection.repo), (), 0)
 
-    def run(machine, command, dry_run=False):
+    def run(machine, command, dry_run=False, checked_target=None):
+        assert checked_target is configured
         calls.append((machine, command, dry_run))
         with pytest.raises(operations.RepositoryBusyError):
             with operations._serialized():
@@ -47,7 +50,7 @@ def test_apply_and_dry_run_do_not_sync_local_store(server, configured, monkeypat
     calls = []
     monkeypatch.setattr(remote, "run", lambda *a, **kw: calls.append((a, kw)) or report())
     post(server, "/api/run", {"command": command, "machine": "macbook", "dry_run": dry_run})
-    assert calls == [(("macbook", command), {"dry_run": dry_run})]
+    assert calls == [(("macbook", command), {"dry_run": dry_run, "checked_target": configured})]
 
 
 def test_failed_local_publish_does_not_start_remote(server, configured, monkeypatch):
