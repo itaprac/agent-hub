@@ -64,6 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
     commands["init"].add_argument("--remote")
     commands["init"].add_argument("--yes", action="store_true")
     commands["apply"].add_argument("--copy", action="store_true")
+    commands["sync"].add_argument("--prefer", choices=("local", "remote"))
+    commands["status"].add_argument("--fleet", action="store_true")
     commands["add-skill"].add_argument("name")
     commands["add-skill"].add_argument("--project")
     commands["adopt"].add_argument("path")
@@ -88,9 +90,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "apply":
             report = store.apply(dry_run=args.dry_run, copy=args.copy)
         elif args.command == "status":
-            report = store.status()
+            report = store.status(fleet=args.fleet)
         elif args.command == "sync":
-            report = store.sync(dry_run=args.dry_run)
+            report = store.sync(dry_run=args.dry_run, prefer=args.prefer)
         elif args.command == "add-skill":
             report = store.add_skill(args.name, args.project)
         elif args.command == "adopt":

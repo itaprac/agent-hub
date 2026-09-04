@@ -18,7 +18,6 @@ from . import config as hub_config
 from . import files as content_files
 from . import gitio
 from . import operations
-from . import peers
 from . import usage
 
 MAX_BODY_BYTES = content_files.MAX_FILE_BYTES + 64 * 1024
@@ -53,52 +52,23 @@ class ApiError(Exception):
 
 # --------------------------------------------------------------------------- hub
 
+
 def run_command(
     content_operations: operations.ContentOperations,
     command: str,
     dry_run: bool,
+    prefer: str | None = None,
 ) -> dict[str, Any]:
     if command == "apply":
         return content_operations.apply(dry_run=dry_run).to_dict()
     if command == "sync":
-        return content_operations.sync(dry_run=dry_run).to_dict()
+        return content_operations.sync(dry_run=dry_run, prefer=prefer).to_dict()
     raise ApiError(400, f"unknown command: {command}")
-
-
-class _WebLocalMachine:
-    """Adapt local package operations to the Peer federation seam."""
-
-    def __init__(self, repo: Path) -> None:
-        self._repo = repo
-        self._content_operations = operations.ContentOperations(repo)
-
-    def git(self, *, fetch: bool) -> dict[str, Any]:
-        return git_state(self._repo, fetch=fetch)
-
-    def status(self) -> dict[str, Any]:
-        return self._content_operations.status().to_dict()
-
-    def machine_id(self) -> str:
-        return self._content_operations.machine_id()
-
-    def usage(self, *, days: int, time_zone: str | None) -> dict[str, Any]:
-        return usage.read_summary(days=days, time_zone=time_zone)
-
-    def run(
-        self,
-        *,
-        command: str,
-        dry_run: bool,
-    ) -> dict[str, Any]:
-        return run_command(self._content_operations, command, dry_run)
-
-
-# --------------------------------------------------------------------------- peers/git
 
 
 def git_state(repo: Path, fetch: bool = True) -> dict[str, Any]:
     try:
-        return gitio.state(repo, fetch=fetch)
+        return operations.ContentOperations(repo).git(fetch=fetch)
     except gitio.GitCommandError as exc:
         status = 504 if "timed out" in str(exc) else 500
         raise ApiError(status, str(exc)) from exc
@@ -132,6 +102,7 @@ def required_name(payload: dict[str, Any], key: str) -> str:
 
 # --------------------------------------------------------------------------- http
 
+
 @dataclasses.dataclass(frozen=True)
 class Route:
     method: str
@@ -146,19 +117,19 @@ def route(method: str, pattern: str, handler: str) -> Route:
 ROUTES = (
     route("GET", r"/api/state", "get_state"),
     route("GET", r"/api/git", "get_git"),
-    route("GET", r"/api/peers", "get_peers"),
+    route("GET", r"/api/fleet", "get_fleet"),
     route("GET", r"/api/status", "get_status"),
     route("GET", r"/api/usage", "get_usage"),
     route("GET", r"/api/usage/settings", "get_usage_settings"),
     route("PUT", r"/api/usage/settings", "put_usage_settings"),
     route("GET", r"/api/file", "get_file"),
     route("POST", r"/api/run", "post_run"),
-    route("POST", r"/api/peers/(?P<machine>[^/]+)/run", "post_peer_run"),
     route("POST", r"/api/add-skill", "post_add_skill"),
     route("POST", r"/api/adopt", "post_adopt"),
     route("PUT", r"/api/file", "put_file"),
     route("DELETE", r"/api/file", "delete_file"),
 )
+
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -173,11 +144,6 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         if not self.quiet:
             sys.stderr.write(f"{self.address_string()} {format % args}\n")
-
-    def peer_federation(self) -> peers.PeerFederation:
-        return peers.PeerFederation(
-            self.repo, _WebLocalMachine(self.repo), peers.HttpPeerTransport()
-        )
 
     def send_payload(
         self,
@@ -215,7 +181,9 @@ class Handler(BaseHTTPRequestHandler):
         headers: dict[str, str] | None = None,
     ) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=None).encode("utf-8")
-        self.send_payload(status, body, "application/json; charset=utf-8", headers=headers)
+        self.send_payload(
+            status, body, "application/json; charset=utf-8", headers=headers
+        )
 
     def send_error_json(self, status: int, message: str) -> None:
         self.send_json({"error": message}, status=status)
@@ -252,27 +220,22 @@ class Handler(BaseHTTPRequestHandler):
         if not origin or not host:
             return False
         parsed = urllib.parse.urlsplit(origin)
-        return parsed.scheme in {"http", "https"} and parsed.netloc.lower() == host.lower()
+        return (
+            parsed.scheme in {"http", "https"} and parsed.netloc.lower() == host.lower()
+        )
 
     def authorize_mutation(self, route: str) -> None:
-        # The browser is authorized by the private-network boundary and protected
-        # from cross-site requests here. The shared secret is server-to-server only.
         if self.is_same_origin_browser_request():
-            return
-        supplied = self.headers.get("X-Hub-Token", "")
-        if route == "/api/run" and self.peer_federation().authorizes(supplied):
             return
         # The request body has not been consumed yet. Closing prevents a reverse
         # proxy from reusing this HTTP/1.1 connection with unread bytes on it.
         self.close_connection = True
-        raise ApiError(401, "authentication required")
+        raise ApiError(401, "a same-origin browser request is required")
 
     def dispatch(self, method: str) -> None:
         try:
             self.handle_route(method)
         except ApiError as exc:
-            self.send_error_json(exc.status, exc.message)
-        except peers.PeerError as exc:
             self.send_error_json(exc.status, exc.message)
         except content_files.FileError as exc:
             self.send_error_json(exc.status, exc.message)
@@ -334,8 +297,8 @@ class Handler(BaseHTTPRequestHandler):
         fetch = (self.query().get("fetch") or ["1"])[0] != "0"
         self.send_json(git_state(self.repo, fetch=fetch))
 
-    def get_peers(self, _match: re.Match[str]) -> None:
-        self.send_json(self.peer_federation().state())
+    def get_fleet(self, _match: re.Match[str]) -> None:
+        self.send_json(operations.ContentOperations(self.repo).fleet())
 
     def get_status(self, _match: re.Match[str]) -> None:
         self.send_json(operations.ContentOperations(self.repo).status().to_dict())
@@ -347,12 +310,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             days = 30
         time_zone = query["tz"][0] if query.get("tz") else None
-        local_only = (query.get("local") or ["0"])[0] == "1"
-        self.send_json(
-            self.peer_federation().usage(
-                days=days, time_zone=time_zone, local_only=local_only
-            )
-        )
+        self.send_json(usage.read_summary(days=days, time_zone=time_zone))
 
     def get_usage_settings(self, _match: re.Match[str]) -> None:
         self.send_json(usage.public_settings())
@@ -380,26 +338,25 @@ class Handler(BaseHTTPRequestHandler):
         )
         self.send_json(file, headers={"ETag": f'"{file["revision"]}"'})
 
-    def _command_payload(self) -> tuple[str, bool]:
+    def _command_payload(self) -> tuple[str, bool, str | None]:
         payload = self.read_json()
         command = payload.get("command")
-        if command not in RUN_COMMANDS:
-            raise ApiError(400, f"command must be one of: {', '.join(sorted(RUN_COMMANDS))}")
-        return command, bool(payload.get("dry_run"))
+        if not isinstance(command, str) or command not in RUN_COMMANDS:
+            raise ApiError(
+                400, f"command must be one of: {', '.join(sorted(RUN_COMMANDS))}"
+            )
+        dry_run = payload.get("dry_run", False)
+        if not isinstance(dry_run, bool):
+            raise ApiError(400, "dry_run must be a boolean")
+        prefer = payload.get("prefer")
+        if prefer is not None and (command != "sync" or prefer not in ("local", "remote")):
+            raise ApiError(400, "prefer is valid only for sync and must be local or remote")
+        return command, dry_run, prefer
 
     def post_run(self, _match: re.Match[str]) -> None:
-        command, dry_run = self._command_payload()
+        command, dry_run, prefer = self._command_payload()
         self.send_json(
-            run_command(operations.ContentOperations(self.repo), command, dry_run)
-        )
-
-    def post_peer_run(self, match: re.Match[str]) -> None:
-        machine = match.group("machine")
-        command, dry_run = self._command_payload()
-        self.send_json(
-            self.peer_federation().run(
-                machine, command=command, dry_run=dry_run
-            )
+            run_command(operations.ContentOperations(self.repo), command, dry_run, prefer)
         )
 
     def post_add_skill(self, _match: re.Match[str]) -> None:
@@ -437,7 +394,9 @@ class Handler(BaseHTTPRequestHandler):
             value = values[0] if values else None
             revisions = self.query().get("revision") or []
             if not revisions:
-                raise ApiError(428, "revision is required; reload the file before changing it")
+                raise ApiError(
+                    428, "revision is required; reload the file before changing it"
+                )
             revision = expected_revision({"revision": revisions[0]})
         self.send_json(
             operations.ContentOperations(self.repo).delete_file(value, revision)
@@ -457,9 +416,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = candidate.read_bytes()
         except OSError as exc:
-            self.send_payload(500, f"cannot read asset: {exc}\n".encode(), "text/plain; charset=utf-8")
+            self.send_payload(
+                500, f"cannot read asset: {exc}\n".encode(), "text/plain; charset=utf-8"
+            )
             return
-        content_type = STATIC_TYPES.get(candidate.suffix.lower(), "application/octet-stream")
+        content_type = STATIC_TYPES.get(
+            candidate.suffix.lower(), "application/octet-stream"
+        )
         self.send_payload(200, body, content_type)
 
 
@@ -470,10 +433,16 @@ class Server(ThreadingHTTPServer):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", type=int, default=7337, help="TCP port (0 picks a free one)")
-    parser.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
     parser.add_argument(
-        "--store", "--repo", dest="repo",
+        "--port", type=int, default=7337, help="TCP port (0 picks a free one)"
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)"
+    )
+    parser.add_argument(
+        "--store",
+        "--repo",
+        dest="repo",
         type=Path,
         default=None,
         help=hub_config.repo_option_help(),
@@ -510,7 +479,10 @@ def main(argv: list[str] | None = None) -> int:
     display = "127.0.0.1" if args.host in {"", "0.0.0.0", "::"} else args.host
     print(f"[ok] serving http://{display}:{port} (repo: {repo})", flush=True)
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
-        print("[skip] no authentication: expose this only on a trusted private network", flush=True)
+        print(
+            "[skip] no authentication: expose this only on a trusted private network",
+            flush=True,
+        )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

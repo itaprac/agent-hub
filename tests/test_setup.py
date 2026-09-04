@@ -252,7 +252,7 @@ def test_setup_uses_local_content_without_applying_it(
     pointer = tmp_path / "home" / ".config" / "agent-hub" / "root"
     assert pointer.read_text(encoding="utf-8") == f"{content.resolve()}\n"
     assert (tmp_path / "app" / ".venv" / "bin" / "agent-hub").is_file()
-    assert not (tmp_path / "home" / ".config" / "agent-hub" / "peer-token").exists()
+    assert not (tmp_path / "home" / ".config" / "agent-hub" / "cursor-session-token").exists()
     assert "[ok] local Content:" in result.stdout
     assert "[ok] Web UI returned HTTP 200" in result.stdout
     assert f"agent-hub --repo {content.resolve()} --dry-run apply" in result.stdout
@@ -307,7 +307,7 @@ def test_macos_setup_rerun_refreshes_only_the_app_and_service(
     home = tmp_path / "home"
     secret_dir = home / ".config" / "agent-hub"
     secret_dir.mkdir(parents=True, exist_ok=True)
-    token = secret_dir / "peer-token"
+    token = secret_dir / "cursor-session-token"
     token.write_text("keep-this-token\n", encoding="utf-8")
     args = (
         "--content",
@@ -356,7 +356,7 @@ def test_macos_uninstall_removes_only_the_service(tmp_path: Path, content: Path)
     installed = run_setup(tmp_path, *args, extra_env=environment)
     assert installed.returncode == 0, installed.stderr
     home = tmp_path / "home"
-    token = home / ".config" / "agent-hub" / "peer-token"
+    token = home / ".config" / "agent-hub" / "cursor-session-token"
     token.write_text("preserved\n", encoding="utf-8")
     content_before = (content / "config" / "hub.toml").read_bytes()
     pointer = home / ".config" / "agent-hub" / "root"
@@ -481,7 +481,7 @@ def test_update_fast_forwards_reexecutes_and_preserves_content(
     secret_dir = home / ".config" / "agent-hub"
     secret_dir.mkdir(parents=True, exist_ok=True)
     pointer = write_content_pointer(tmp_path, content)
-    token = secret_dir / "peer-token"
+    token = secret_dir / "cursor-session-token"
     token.write_text("do-not-change\n", encoding="utf-8")
     content_head = git(content, "rev-parse", "HEAD").stdout
     content_status = git(content, "status", "--porcelain").stdout
@@ -642,30 +642,6 @@ def test_setup_does_not_overwrite_a_clone_destination(
     assert sentinel.read_text(encoding="utf-8") == "keep\n"
 
 
-def test_setup_accepts_a_peer_token_file_outside_git(
-    tmp_path: Path, content: Path
-) -> None:
-    source = tmp_path / "shared-token"
-    source.write_text("shared-secret\n", encoding="utf-8")
-
-    result = run_setup(
-        tmp_path,
-        "--content",
-        str(content),
-        "--machine",
-        "testmachine",
-        "--peer-token-file",
-        str(source),
-        "--non-interactive",
-    )
-
-    assert result.returncode == 0, result.stderr
-    token = tmp_path / "home" / ".config" / "agent-hub" / "peer-token"
-    assert token.read_text(encoding="utf-8") == "shared-secret\n"
-    assert token.stat().st_mode & 0o777 == 0o600
-    assert not (content / "peer-token").exists()
-
-
 def test_setup_requires_an_explicit_content_choice_when_unattended(tmp_path: Path) -> None:
     result = run_setup(tmp_path, "--machine", "testmachine", "--non-interactive")
 
@@ -699,27 +675,6 @@ def test_setup_registers_a_machine_without_committing_existing_content(
     assert set(hub_data["machines"].values()) == {"existing"}
     assert git(content, "rev-parse", "HEAD").stdout.strip() == head
     assert git(content, "status", "--porcelain").stdout == " M config/hub.toml\n"
-
-
-def test_setup_can_generate_a_peer_token_outside_git(
-    tmp_path: Path, content: Path
-) -> None:
-    result = run_setup(
-        tmp_path,
-        "--content",
-        str(content),
-        "--machine",
-        "testmachine",
-        "--generate-peer-token",
-        "--non-interactive",
-    )
-
-    assert result.returncode == 0, result.stderr
-    token = tmp_path / "home" / ".config" / "agent-hub" / "peer-token"
-    value = token.read_text(encoding="utf-8").strip()
-    assert len(value) == 64
-    assert all(character in "0123456789abcdef" for character in value)
-    assert token.stat().st_mode & 0o777 == 0o600
 
 
 def test_setup_reports_how_to_install_missing_bash(tmp_path: Path) -> None:

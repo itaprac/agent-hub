@@ -61,7 +61,6 @@ pin = Path.home() / ".config" / "agent-hub" / "machine"
 pin.parent.mkdir(parents=True)
 pin.write_text("testmachine\n", encoding="utf-8")
 (repo / "config" / "skills.toml").write_text("", encoding="utf-8")
-(repo / "config" / "peers.toml").write_text("", encoding="utf-8")
 
 files = {
     repo / "skills" / "global-one" / "SKILL.md": "# Global fixture\n",
@@ -81,8 +80,7 @@ git -C "$REPO" config user.email "smoke@example.invalid"
 git -C "$REPO" add -A
 git -C "$REPO" commit -qm "fixture"
 
-AGENT_HUB_PEER_TOKEN="web-smoke-token" \
-    python3 "$REPO/web.py" --repo "$REPO" --host 127.0.0.1 --port 0 --quiet \
+python3 "$REPO/web.py" --repo "$REPO" --host 127.0.0.1 --port 0 --quiet \
     >"$TMP/web.log" 2>&1 &
 SERVER_PID=$!
 
@@ -217,7 +215,7 @@ try:
         try:
             operation()
         except operations.RepositoryBusyError as exc:
-            assert str(exc) == "repository is busy; try again after the current operation finishes"
+            assert str(exc) == "store is busy; try again after the current operation finishes"
         else:
             raise AssertionError("repository operation waited for or bypassed the held lock")
 finally:
@@ -512,7 +510,7 @@ assert secret in log.getvalue()
 PY
 echo "PASS"
 
-echo "== 9. browser and peer authentication are separate =="
+echo "== 9. browser origin checks cannot be bypassed by retired peer tokens =="
 printf '{"command": "apply", "dry_run": true}' >"$TMP/run.json"
 CODE="$(curl -sS -D "$TMP/unauth.headers" -o "$BODY" -w '%{http_code}' -H 'Content-Type: application/json' \
     --data-binary @"$TMP/run.json" "$BASE/api/run")"
@@ -520,7 +518,7 @@ expect_status 401 "$CODE" "POST /api/run (no authentication)"
 grep -Fqi 'connection: close' "$TMP/unauth.headers"
 CODE="$(curl -sS -o "$BODY" -w '%{http_code}' -H 'Content-Type: application/json' \
     -H 'X-Hub-Token: web-smoke-token' --data-binary @"$TMP/run.json" "$BASE/api/run")"
-expect_status 200 "$CODE" "POST /api/run (peer token)"
+expect_status 401 "$CODE" "POST /api/run (retired peer token)"
 printf '{"path": "hub.toml", "content": ""}' >"$TMP/file.json"
 CODE="$(curl -sS -X PUT -o "$BODY" -w '%{http_code}' -H 'Content-Type: application/json' \
     -H 'X-Hub-Token: web-smoke-token' --data-binary @"$TMP/file.json" "$BASE/api/file")"

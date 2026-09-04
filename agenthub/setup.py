@@ -6,7 +6,6 @@ import argparse
 import json
 import os
 import platform
-import secrets
 import shlex
 import shutil
 import subprocess
@@ -75,17 +74,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--non-interactive",
         action="store_true",
         help="fail instead of prompting for a missing choice",
-    )
-    peer = parser.add_mutually_exclusive_group()
-    peer.add_argument(
-        "--peer-token-file",
-        type=Path,
-        help="read an existing Peer token from a file and store it outside Git",
-    )
-    peer.add_argument(
-        "--generate-peer-token",
-        action="store_true",
-        help="create and store a new Peer token outside Git",
     )
     return parser
 
@@ -435,23 +423,6 @@ def run_status(cli: Path, content: Path, machine: str) -> None:
         raise SetupError(result.stderr.strip() or "agent-hub status failed")
 
 
-def store_peer_token(home: Path, value: str) -> Path:
-    value = value.strip()
-    if not value:
-        raise SetupError("Peer token cannot be empty")
-    path = home / ".config" / "agent-hub" / "peer-token"
-    atomic_write(path, f"{value}\n")
-    return path
-
-
-def read_peer_token(path: Path) -> str:
-    source = path.expanduser().resolve()
-    try:
-        return source.read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeError) as exc:
-        raise SetupError(f"cannot read Peer token file {source}: {exc}") from exc
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -501,12 +472,6 @@ def main(argv: list[str] | None = None) -> int:
         if selection.created:
             commit_new_content(content, app_root)
         pointer = write_pointer(home, content)
-        if args.peer_token_file is not None:
-            token = store_peer_token(home, read_peer_token(args.peer_token_file))
-            print(f"[ok] Peer token: {token}")
-        elif args.generate_peer_token:
-            token = store_peer_token(home, secrets.token_hex(32))
-            print(f"[ok] Peer token: {token}")
         cli, web = install_app(app_root, python)
         run_status(cli, content, machine)
         lifecycle_result = lifecycle.activate(

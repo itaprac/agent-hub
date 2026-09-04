@@ -228,3 +228,30 @@ def test_state_snapshot_participates_in_serialization(
         release.set()
         thread.join(timeout=5)
     assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("read", ["fleet", "git"])
+def test_fleet_and_git_reads_fail_immediately_while_store_is_busy(
+    content_operations: operations.ContentOperations, monkeypatch: pytest.MonkeyPatch, read: str
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    load = operations.config.load_machine_projection
+    monkeypatch.setattr(
+        operations.config,
+        "load_machine_projection",
+        lambda repo: hold_operation(lambda: load(repo), entered, release),
+    )
+    thread = threading.Thread(target=content_operations.status)
+    thread.start()
+    assert entered.wait(timeout=5)
+    try:
+        with pytest.raises(operations.RepositoryBusyError, match="store is busy"):
+            if read == "fleet":
+                content_operations.fleet()
+            else:
+                content_operations.git(fetch=False)
+    finally:
+        release.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive()

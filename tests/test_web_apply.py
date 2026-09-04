@@ -67,16 +67,7 @@ def test_invalid_configuration_is_one_error_line_with_exit_two(
     assert "mode" in payload["lines"][0]["text"]
 
 
-def test_local_peer_run_uses_the_same_content_operation_as_a_local_run(
-    server: str,
-    home: Path,
-) -> None:
-    payload = post(server, "/api/peers/testmachine/run", {"command": "apply"})
-    assert payload["exit_code"] == 0
-    assert (home / ".claude" / "skills" / "alpha").is_symlink()
-
-
-def test_apply_requires_a_browser_or_peer_identity(server: str, home: Path) -> None:
+def test_apply_requires_a_browser_identity(server: str, home: Path) -> None:
     with pytest.raises(urllib.error.HTTPError) as error:
         post(server, "/api/run", {"command": "apply"}, headers={"Content-Type": "application/json"})
     assert error.value.code == 401

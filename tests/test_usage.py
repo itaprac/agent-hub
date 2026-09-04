@@ -493,25 +493,7 @@ def test_read_summary_includes_grok_only_when_enabled() -> None:
                 os.environ["HOME"] = old
 
 
-def test_merge_keeps_one_cursor_source() -> None:
-    left = {
-        "machine": "mini",
-        "buckets": [{"day": "2026-08-01", "hourStart": None, "provider": "cursor", "model": "a", "totals": usage._empty_totals(), "costUsd": 1, "cacheSavingsUsd": 0, "records": 1, "unpricedRecords": 0, "sessions": 1}],
-        "sources": [{"provider": "cursor", "status": "ok", "scannedFiles": 2, "sessions": 1, "machine": "mini"}],
-        "settings": {"grok": False, "cursor": True, "cursorTokenSet": True},
-    }
-    right = {
-        "machine": "macbook",
-        "buckets": [{"day": "2026-08-01", "hourStart": None, "provider": "cursor", "model": "a", "totals": usage._empty_totals(), "costUsd": 4, "cacheSavingsUsd": 0, "records": 1, "unpricedRecords": 0, "sessions": 1}],
-        "sources": [{"provider": "cursor", "status": "ok", "scannedFiles": 8, "sessions": 1, "machine": "macbook"}],
-    }
-    merged = usage.merge_summaries([left, right])
-    assert_eq(len(merged["buckets"]), 1, "one cursor bucket")
-    assert_eq(merged["buckets"][0]["costUsd"], 1.0, "keep first machine")
-    assert_eq([s["machine"] for s in merged["sources"]], ["mini"], "one cursor source")
-
-
-def test_merge_returns_finished_rollups() -> None:
+def test_local_buckets_return_finished_rollups() -> None:
     monday = {
         "day": "2026-08-03",
         "hourStart": None,
@@ -530,8 +512,7 @@ def test_merge_returns_finished_rollups() -> None:
         "unpricedRecords": 0,
         "sessions": 1,
     }
-    mini = {
-        "machine": "mini",
+    first_batch = {
         "resolution": "day",
         "buckets": [monday],
         "sources": [
@@ -540,13 +521,11 @@ def test_merge_returns_finished_rollups() -> None:
                 "status": "ok",
                 "scannedFiles": 1,
                 "sessions": 1,
-                "machine": "mini",
             }
         ],
         "settings": usage.public_settings({}),
     }
-    macbook = {
-        "machine": "macbook",
+    second_batch = {
         "resolution": "day",
         "buckets": [
             {
@@ -585,19 +564,21 @@ def test_merge_returns_finished_rollups() -> None:
                 "status": "ok",
                 "scannedFiles": 1,
                 "sessions": 1,
-                "machine": "macbook",
             },
             {
                 "provider": "claude",
                 "status": "ok",
                 "scannedFiles": 1,
                 "sessions": 1,
-                "machine": "macbook",
             },
         ],
     }
 
-    report = usage.merge_summaries([mini, macbook])["rollups"]
+    report = usage._build_rollups(
+        first_batch["buckets"] + second_batch["buckets"],
+        first_batch["sources"] + second_batch["sources"],
+        "day",
+    )
 
     assert_eq(report["total"]["totalTokens"], 76, "total tokens")
     assert_eq(report["total"]["costUsd"], 3.75, "total cost")
@@ -616,11 +597,6 @@ def test_merge_returns_finished_rollups() -> None:
         [(row["source"], row["model"], row["totalTokens"]) for row in report["byModel"]],
         [("codex", "gpt-5.6", 30), ("claude", "claude-opus-5", 46)],
         "model rollups",
-    )
-    assert_eq(
-        [(row["machine"], row["totalTokens"], row["sessions"]) for row in report["byMachine"]],
-        [("mini", 36, 1), ("macbook", 40, 2)],
-        "machine rollups",
     )
     assert_eq(
         [(row["source"], row["totalTokens"], row["sessions"]) for row in report["bySource"]],
@@ -664,7 +640,6 @@ def main() -> int:
     test_cursor_event()
     test_settings_round_trip()
     test_read_summary_includes_grok_only_when_enabled()
-    test_merge_keeps_one_cursor_source()
     test_rate_table_prefers_bare_entry_over_reseller()
     print("ok")
     return 0
