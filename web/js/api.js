@@ -56,7 +56,7 @@ export const api = {
     }),
   addSkill: (name, project) => request("POST", "/api/add-skill", { name, project: project || null }),
   adopt: (path, project, name) =>
-    request("POST", "/api/adopt", { path, project: project || null, name: name || null }),
+    request("POST", "/api/adopt", { path, project: Boolean(project), name: name || null }),
   readFile: (path) => request("GET", `/api/file?path=${encodeURIComponent(path)}`),
   writeFile: (path, content, revision) => request("PUT", "/api/file", { path, content, revision }),
   deleteFile: (path, revision) => request("DELETE", "/api/file", { path, revision }),

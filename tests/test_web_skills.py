@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from agenthub import config, operations
+from agenthub import config, operations, projects
+from conftest import git, write
 
 SAME_ORIGIN = {"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}
 
@@ -59,7 +60,7 @@ def test_adopt_moves_through_the_package(
     source = home / "local-skill"
     source.mkdir()
     (source / "SKILL.md").write_text("# local-skill\n", encoding="utf-8")
-    payload = post(server, "/api/adopt", {"path": str(source)})
+    payload = post(server, "/api/adopt", {"path": str(source), "project": False})
     assert payload["command"] == "adopt"
     assert payload["exit_code"] == 0
     destination = content / "skills" / "local-skill"
@@ -122,3 +123,36 @@ def test_state_skill_files_hide_hidden_paths(server: str, content: Path) -> None
     state = get(server, "/api/state")
     [alpha] = [entry for entry in state["skills"]["global"] if entry["name"] == "alpha"]
     assert [item["name"] for item in alpha["files"]] == ["SKILL.md"]
+
+
+@pytest.fixture
+def web_project(project: Path) -> Path:
+    git(project, "init", "-q", "-b", "main")
+    git(project, "config", "user.name", "Web project tests")
+    git(project, "config", "user.email", "web-project@example.invalid")
+    write(project / "README.md", "Project\n")
+    git(project, "add", ".")
+    git(project, "commit", "-qm", "project")
+    git(project, "remote", "add", "origin", "https://example.invalid/team/project.git")
+    return project
+
+
+def test_add_skill_accepts_the_checkout_path_from_web_state(server: str, content: Path, web_project: Path) -> None:
+    assert operations.ContentOperations(content).project_link(web_project).exit_code == 0
+    [registered] = get(server, "/api/state")["projects"]
+    payload = post(server, "/api/add-skill", {"name": "web-private", "project": registered["path"]})
+    assert payload["exit_code"] == 0, payload["lines"]
+    destination = content / "projects" / registered["name"] / "skills" / "web-private"
+    assert (destination / "SKILL.md").is_file()
+    assert (web_project / ".agents" / "skills" / "web-private").resolve() == destination
+    assert git(web_project, "status", "--porcelain").stdout == ""
+
+
+def test_adopt_project_scope_uses_the_source_checkout(server: str, content: Path, web_project: Path) -> None:
+    source = web_project / "local-skill"
+    write(source / "SKILL.md", "Private skill\n")
+    payload = post(server, "/api/adopt", {"path": str(source), "project": True, "name": "adopted-private"})
+    assert payload["exit_code"] == 0, payload["lines"]
+    destination = content / "projects" / projects.project_slug(web_project) / "skills" / "adopted-private"
+    assert source.is_symlink() and source.resolve() == destination
+    assert git(web_project, "status", "--porcelain").stdout == ""

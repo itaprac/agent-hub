@@ -349,14 +349,20 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(dry_run, bool):
             raise ApiError(400, "dry_run must be a boolean")
         prefer = payload.get("prefer")
-        if prefer is not None and (command != "sync" or prefer not in ("local", "remote")):
-            raise ApiError(400, "prefer is valid only for sync and must be local or remote")
+        if prefer is not None and (
+            command != "sync" or prefer not in ("local", "remote")
+        ):
+            raise ApiError(
+                400, "prefer is valid only for sync and must be local or remote"
+            )
         return command, dry_run, prefer
 
     def post_run(self, _match: re.Match[str]) -> None:
         command, dry_run, prefer = self._command_payload()
         self.send_json(
-            run_command(operations.ContentOperations(self.repo), command, dry_run, prefer)
+            run_command(
+                operations.ContentOperations(self.repo), command, dry_run, prefer
+            )
         )
 
     def post_add_skill(self, _match: re.Match[str]) -> None:
@@ -368,9 +374,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_adopt(self, _match: re.Match[str]) -> None:
         payload = self.read_json()
+        project = payload.get("project", False)
+        if not isinstance(project, bool):
+            raise ApiError(400, "project must be a boolean")
         report = operations.ContentOperations(self.repo).adopt(
             required_name(payload, "path"),
-            optional_name(payload, "project"),
+            project,
             optional_name(payload, "name"),
         )
         self.send_json(report.to_dict())

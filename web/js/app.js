@@ -2,7 +2,7 @@
 
 import { api } from "./api.js";
 import { $, $$, formatTime, toast } from "./dom.js";
-import { formDialog, projectField } from "./modals.js";
+import { adoptProjectField, formDialog, projectField } from "./modals.js";
 import { mountPeers, refreshPeers, renderPeers } from "./peers.js";
 import { renderLog, renderStatusView, summarize } from "./status.js";
 import { store, subscribe, update, withBusy } from "./store.js";
@@ -173,14 +173,13 @@ async function newSkill() {
 }
 
 async function adoptSkill() {
-  const projects = store.state?.projects || [];
   const values = await formDialog({
     title: "Adopt an existing skill",
     sub: "Moves a directory into the repository and leaves a symlink behind.",
     confirmLabel: "Adopt",
     fields: [
       { name: "path", label: "Directory path", required: true, placeholder: "~/.claude/skills/my-skill" },
-      projectField(projects),
+      adoptProjectField(),
       { name: "name", label: "Skill name (optional)", placeholder: "defaults to the directory name" },
     ],
   });

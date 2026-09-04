@@ -376,12 +376,34 @@ def load_machine_projection(repo: Path, *, copy: bool = False) -> MachineProject
                         Path(agent.instructions_global),
                     )
                 )
+    from .projects import load_projects
+
+    try:
+        registered = load_projects()
+    except (ValueError, OSError) as exc:
+        raise ConfigError(str(exc)) from exc
+    projects = tuple(
+        ProjectProjection(
+            name=slug,
+            machines=(),
+            path=path,
+            availability="available"
+            if path.is_dir()
+            else "missing"
+            if not path.exists()
+            else "not_directory",
+            reason=""
+            if path.is_dir()
+            else f"path is not an available directory: {path}",
+        )
+        for slug, path in sorted(registered.items())
+    )
     return MachineProjection(
         repo,
         machine_id,
         hostname,
         agents,
-        (),
+        projects,
         tuple(skill_targets),
         tuple(instruction_targets),
         tuple(
