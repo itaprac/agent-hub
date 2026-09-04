@@ -1,38 +1,80 @@
-# macOS file access for the App service
+# macOS file access for Timer and Console
 
-macOS records a file-access grant against the resolved interpreter path. With a
-Homebrew Python, that path contains the Cellar version
-(`/opt/homebrew/Cellar/python@3.14/<version>/…/bin/python3.14`). Every
-`brew upgrade` of Python changes the path. The old grant does not apply to the
-new path. launchd then tries and fails to restart the App service.
+`agent-hub timer on` installs a user LaunchAgent that runs Sync every ten minutes.
+`agent-hub ui --service on` installs a separate Console LaunchAgent. The foreground
+command, `agent-hub ui`, does not need either service.
 
-## Detect
+macOS can block a background process from reading protected folders even when
+that command works in Terminal. Full Disk Access is controlled in System
+Settings > Privacy & Security. The operator must grant access; the App cannot
+grant it itself. See [Apple's file-access settings](https://support.apple.com/guide/mac-help/mchl211c911f/mac).
 
-| Signal | Where |
+## Find the failing process
+
+| Signal | Check |
 |---|---|
-| Web UI unreachable at `http://127.0.0.1:7337/` | browser |
-| `PermissionError: [Errno 1] Operation not permitted` | `~/Library/Logs/agent-hub-web.error.log` |
-| "did not return HTTP 200" plus the re-grant steps | `./setup.sh` and `./setup.sh --update` |
+| Sync does not run | `agent-hub timer status` |
+| Console does not respond | `agent-hub ui --service status` |
+| Sync reports `Operation not permitted` | `~/Library/Logs/agent-hub-sync.error.log` and `~/Library/Logs/agent-hub-sync.log` |
+| Console reports `Operation not permitted` | `~/Library/Logs/agent-hub-web.error.log` and `~/Library/Logs/agent-hub-web.log` |
 
-## Fix
-
-1. Find the resolved interpreter: `readlink -f <app>/.venv/bin/python`.
-2. Open System Settings > Privacy & Security > Full Disk Access.
-3. Add that binary. Press Cmd+Shift+G in the file picker to type the path. Remove entries for old versions.
-4. Restart the service: `launchctl kickstart -k gui/$(id -u)/com.agenthub.web`.
-
-Add the binary by path. The bundle entry (`org.python.python`) does not grant
-access to the interpreter that launchd starts.
-
-## Prevent
-
-Use an interpreter whose path does not change on upgrade, for example the
-python.org installer (`/Library/Frameworks/Python.framework/Versions/3.x/bin/python3`).
-To switch, rebuild the App environment with it:
+Inspect the installed jobs to find the executable that launchd starts. This works
+with both `uv tool install` and `pipx install`; it does not assume an App checkout
+or a `.venv` directory.
 
 ```bash
-rm -rf <app>/.venv
-AGENT_HUB_SETUP_PYTHON=/Library/Frameworks/Python.framework/Versions/3.14/bin/python3 ./setup.sh
+python3 - <<'PY'
+from pathlib import Path
+import plistlib
+import shlex
+
+for label in ("com.agenthub.sync", "com.agenthub.web"):
+    path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+    if not path.is_file():
+        continue
+    with path.open("rb") as handle:
+        job = plistlib.load(handle)
+    executable = Path(job["ProgramArguments"][0]).resolve()
+    print(f"{label}: {executable}")
+    with executable.open("rb") as handle:
+        first_line = handle.readline().decode("utf-8", errors="replace").strip()
+    if first_line.startswith("#!"):
+        interpreter = shlex.split(first_line[2:])[0]
+        print(f"  interpreter: {Path(interpreter).resolve()}")
+    print(f"  errors: {job.get('StandardErrorPath', 'not configured')}")
+PY
 ```
 
-Then grant Full Disk Access to that binary once.
+## Restore access
+
+1. Find the Python interpreter path with the command above.
+2. Open System Settings > Privacy & Security > Full Disk Access.
+3. Add that binary. Use Cmd+Shift+G in the file picker to enter its path. Remove
+   entries for interpreters that are no longer installed.
+4. Restart the affected job with the same Store selection that you used when
+   installing it:
+
+```bash
+agent-hub timer off
+agent-hub timer on
+
+agent-hub ui --service off
+agent-hub ui --service on
+```
+
+For a custom Store, add `--store /absolute/path/to/store` to those commands.
+Restart only the jobs you use. Check their status and error logs again.
+A grant for Terminal alone does not prove that the interpreter started by
+launchd has access. Apple discusses this distinction for background tools in
+[its developer forum](https://developer.apple.com/forums/thread/118508).
+
+## After changing Python
+
+A Homebrew Python executable can resolve to a versioned Cellar path. An upgrade
+can change that path. A replacement interpreter can also change the identity
+that macOS uses for access control. If a job stops working after an upgrade,
+inspect its installed executable and grant access to the current interpreter.
+
+After reinstalling the App with a different interpreter, turn each installed job
+off and on with the new `agent-hub` command. This refreshes the executable path
+in its LaunchAgent. Do not remove the Store or rebuild an unrelated checkout.

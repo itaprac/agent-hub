@@ -37,8 +37,8 @@ STATIC_TYPES = {
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_WEB_ROOT = APP_ROOT / "web"
-INSTALLED_WEB_ROOT = Path(sys.prefix) / "share" / "agent-hub" / "web"
-WEB_ROOT = SOURCE_WEB_ROOT if SOURCE_WEB_ROOT.is_dir() else INSTALLED_WEB_ROOT
+INSTALLED_WEB_ROOT = Path(__file__).resolve().parent / "web_assets"
+WEB_ROOT = INSTALLED_WEB_ROOT if (INSTALLED_WEB_ROOT / "index.html").is_file() else SOURCE_WEB_ROOT
 
 
 class ApiError(Exception):
