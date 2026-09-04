@@ -283,7 +283,7 @@ def apply_symlink(
         return StatusCheck(level="link", text=f"replace {label} -> {source}", **fields)
     if target.exists():
         return StatusCheck(
-            level="DRIFT", text=f"{label} is not a symlink; run: hub adopt {target}", **fields
+            level="DRIFT", text=f"{label} is not a symlink; run: agent-hub adopt {target}", **fields
         )
     if not dry_run:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -488,11 +488,11 @@ def check_instruction(item: InstructionTarget) -> StatusCheck:
     rendered, malformed = render_managed(existing, item.content)
     if malformed:
         return StatusCheck(
-            level="DRIFT", text=f"{label} has missing or malformed managed markers", **fields
+            level="DRIFT", text=f"{label} has malformed or duplicate managed markers", **fields
         )
     if BEGIN_MARKER not in existing or END_MARKER not in existing:
         return StatusCheck(
-            level="STALE", text=f"{label} has missing or malformed managed markers", **fields
+            level="STALE", text=f"{label} has missing managed markers", **fields
         )
     if existing != rendered:
         return StatusCheck(level="STALE", text=f"{label} managed content is out of date", **fields)
@@ -827,5 +827,5 @@ def adopt_skill_report(
         )
     return report(
         skill_check("ok", f"adopted {source} -> {destination}", **fields),
-        skill_check("ok", "run 'hub apply' to deploy the skill to other agents", **fields),
+        skill_check("ok", "run 'agent-hub apply' to deploy the skill to other agents", **fields),
     )

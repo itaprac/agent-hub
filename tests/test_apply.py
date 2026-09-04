@@ -89,7 +89,7 @@ def test_regular_directory_target_is_drift(content: Path, home: Path) -> None:
     report = apply(content)
     check = find(report, target)
     assert check.level == "DRIFT"
-    assert check.text == f"claude global/alpha: {target} is not a symlink; run: hub adopt {target}"
+    assert check.text == f"claude global/alpha: {target} is not a symlink; run: agent-hub adopt {target}"
     assert report.exit_code == 1
     assert (target / "keep").is_dir()
 
@@ -149,7 +149,7 @@ def test_retired_polish_marker_is_drift_and_untouched(content: Path, home: Path)
     status = operations.ContentOperations(content).status()
     status_check = find(status, target)
     assert status_check.level == "DRIFT"
-    assert status_check.text.endswith("has missing or malformed managed markers")
+    assert status_check.text.endswith("has malformed or duplicate managed markers")
     assert status.exit_code == 1
 
     report = apply(content)
@@ -181,7 +181,7 @@ def test_malformed_markers_are_drift_and_untouched(
     status = operations.ContentOperations(content).status()
     status_check = find(status, target)
     assert status_check.level == "DRIFT"
-    assert status_check.text.endswith("has missing or malformed managed markers")
+    assert status_check.text.endswith("has malformed or duplicate managed markers")
     assert status.exit_code == 1
 
     report = apply(content)

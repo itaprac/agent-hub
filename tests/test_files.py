@@ -82,3 +82,10 @@ def test_atomic_write_preserves_executable_mode(content: Path) -> None:
     )
 
     assert path.stat().st_mode & 0o777 == 0o755
+
+
+@pytest.mark.parametrize("path", ["instructions/global/base.md", "config/agents.toml", "config/hub.toml"])
+def test_legacy_paths_are_not_editable(content: Path, path: str) -> None:
+    with pytest.raises(files.FileError) as error:
+        files.write(content, path, "unused content", None)
+    assert error.value.status == 403

@@ -82,7 +82,7 @@ def test_removed_managed_markers_are_stale(content: Path, home: Path) -> None:
     target.write_text("no markers here\n", encoding="utf-8")
     check = find(status(content), target)
     assert check.level == "STALE"
-    assert check.text.endswith("has missing or malformed managed markers")
+    assert check.text.endswith("has missing managed markers")
 
 
 def test_orphaned_skill_symlink_is_stale(content: Path, home: Path) -> None:

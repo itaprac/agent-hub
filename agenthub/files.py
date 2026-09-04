@@ -49,15 +49,11 @@ def resolve(repo: Path, requested_path: Any) -> Path:
     if any(part.startswith(".") for part in path.parts):
         raise FileError(400, f"hidden paths are not editable: {path}")
     editable_content = (
-        path.parts[0] in {"skills", "projects", "instructions"}
+        path.parts[0] in {"skills", "projects"}
         or path.as_posix() == "AGENTS.md"
         or (len(path.parts) == 2 and path.parts[0] == "agents" and path.suffix == ".md")
     )
-    editable_config = path.as_posix() == "hub.toml" or (
-        len(path.parts) == 2
-        and path.parts[0] == "config"
-        and candidate.suffix.lower() == ".toml"
-    )
+    editable_config = path.as_posix() == "hub.toml"
     if not editable_content and not editable_config:
         raise FileError(403, f"path is outside the editable repository areas: {path}")
     if candidate.suffix.lower() not in TEXT_SUFFIXES:
