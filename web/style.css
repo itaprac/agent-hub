@@ -1811,7 +1811,7 @@ html[data-theme="light"] .usage-page {
   .tab-dot { position: absolute; top: 7px; right: 7px; width: 5px; height: 5px; }
   .host { justify-content: center; padding: 8px 0; }
   .mgrid { grid-template-columns: minmax(0, 1fr); }
-  .fleet:nth-of-type(n) { padding-inline: 0; border-left: 0; }
+  .mgrid > .fleet { padding-inline: 0; border-left: 0; }
   .fleet + .fleet { border-top: 1px solid var(--line-soft); }
   .repo-path { display: none; }
   .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 34%) minmax(0, 1fr); }
