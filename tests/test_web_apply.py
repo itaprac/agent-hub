@@ -60,7 +60,7 @@ def test_drift_is_reported_with_exit_one(server: str, content: Path, home: Path)
 def test_invalid_configuration_is_one_error_line_with_exit_two(
     server: str, content: Path
 ) -> None:
-    (content / "config" / "agents.toml").write_text('[claude]\nmode = "hardlink"\n', encoding="utf-8")
+    (content / "hub.toml").write_text('[agents]\nmode = "hardlink"\n', encoding="utf-8")
     payload = post(server, "/api/run", {"command": "apply"})
     assert payload["exit_code"] == 2
     assert [line["level"] for line in payload["lines"]] == ["ERROR"]

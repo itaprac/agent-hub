@@ -29,61 +29,37 @@ repo = Path(sys.argv[1])
 project = Path(sys.argv[2])
 hostname = sys.argv[3]
 
-# The App repo carries no config/; the fixture creates the Content shape itself.
-(repo / "config").mkdir(parents=True, exist_ok=True)
-(repo / "config" / "hub.toml").write_text(
-    f'[machines]\n"{hostname}" = "testmachine"\nunused-host = "other-machine"\n',
-    encoding="utf-8",
-)
-(repo / "config" / "agents.toml").write_text(
-    """[claude]
-skills_global = "~/.claude/skills/{name}"
-skills_project = "{project_root}/.claude/skills/{name}"
-instructions_global = "~/.claude/CLAUDE.md"
-instructions_project = "{project_root}/CLAUDE.md"
+(repo / "hub.toml").write_text(
+    """[agents]
+enabled = ["claude"]
 mode = "symlink"
 
-[copybot]
-skills_global = "~/copybot/skills/{name}"
-mode = "copy"
-""",
-    encoding="utf-8",
-)
-(repo / "config" / "projects.toml").write_text(
-    f'[demo]\ntestmachine = "{project}"\n\n[missing-project]\nother-machine = "~/missing"\n',
-    encoding="utf-8",
-)
-(repo / "config" / "skills.toml").write_text(
-    """[global-one]
-agents = ["claude", "copybot"]
+[agents.claude]
+skills_global = "~/.claude/skills"
+instructions_global = "~/.claude/CLAUDE.md"
 
-[global-current-machine]
+[skills.global-one]
+agents = ["claude"]
+
+[skills.global-current-machine]
 agents = ["claude"]
 machines = ["testmachine"]
 
-[global-other-machine]
-machines = ["other-machine"]
-
-[project-current-machine]
-machines = ["testmachine"]
-
-[project-other-machine]
+[skills.global-other-machine]
 machines = ["other-machine"]
 """,
     encoding="utf-8",
 )
+pin = Path.home() / ".config" / "agent-hub" / "machine"
+pin.parent.mkdir(parents=True)
+pin.write_text("testmachine\n", encoding="utf-8")
 
 files = {
     repo / "skills" / "global" / "global-one" / "SKILL.md": "# Global fixture\n",
     repo / "skills" / "global" / "global-current-machine" / "SKILL.md": "# Current machine\n",
     repo / "skills" / "global" / "global-other-machine" / "SKILL.md": "# Other machine\n",
-    repo / "skills" / "projects" / "demo" / "project-one" / "SKILL.md": "# Project fixture\n",
-    repo / "skills" / "projects" / "demo" / "project-current-machine" / "SKILL.md": "# Current machine\n",
-    repo / "skills" / "projects" / "demo" / "project-other-machine" / "SKILL.md": "# Other machine\n",
     repo / "instructions" / "global" / "base.md": "Global base v1\n",
     repo / "instructions" / "global" / "claude.md": "Claude global overlay\n",
-    repo / "instructions" / "projects" / "demo" / "base.md": "Project base v1\n",
-    repo / "instructions" / "projects" / "demo" / "claude.md": "Claude project overlay\n",
 }
 for path, content in files.items():
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,8 +90,9 @@ HUB_OUTPUT=""
 run_hub() {
     if HUB_OUTPUT="$(hub "$@" 2>&1)"; then
         return 0
+    else
+        local status=$?
     fi
-    local status=$?
     printf '%s\n' "$HUB_OUTPUT" >&2
     echo "COMMAND FAILED: hub $* (exit $status)" >&2
     return "$status"
@@ -139,27 +116,19 @@ assert_symlink_to() {
     fi
 }
 
-echo "== 1. apply creates links, copies, and managed blocks =="
+echo "== 1. apply creates links and managed blocks =="
 run_hub --dry-run apply
 test ! -e "$FAKE_HOME/.claude/skills/global-one"
 test ! -e "$PROJECT/.claude/skills/project-one"
 run_hub apply
 assert_symlink_to "$FAKE_HOME/.claude/skills/global-one" "$REPO/skills/global/global-one"
-assert_symlink_to "$PROJECT/.claude/skills/project-one" "$REPO/skills/projects/demo/project-one"
 assert_symlink_to "$FAKE_HOME/.claude/skills/global-current-machine" "$REPO/skills/global/global-current-machine"
-assert_symlink_to "$PROJECT/.claude/skills/project-current-machine" "$REPO/skills/projects/demo/project-current-machine"
 test ! -e "$FAKE_HOME/.claude/skills/global-other-machine"
 test ! -e "$PROJECT/.claude/skills/project-other-machine"
-test ! -e "$FAKE_HOME/copybot/skills/global-current-machine"
-test ! -e "$FAKE_HOME/copybot/skills/global-other-machine"
-test -f "$FAKE_HOME/copybot/skills/global-one/SKILL.md"
-test ! -L "$FAKE_HOME/copybot/skills/global-one"
 assert_file_contains "$FAKE_HOME/.claude/CLAUDE.md" "Global base v1"
 assert_file_contains "$FAKE_HOME/.claude/CLAUDE.md" "Claude global overlay"
 assert_file_contains "$PROJECT/CLAUDE.md" "user-owned project text"
-assert_file_contains "$PROJECT/CLAUDE.md" "Project base v1"
-assert_file_contains "$PROJECT/CLAUDE.md" "<!-- agent-hub:begin"
-python3 - "$FAKE_HOME/.claude/CLAUDE.md" "$PROJECT/CLAUDE.md" <<'PY'
+python3 - "$FAKE_HOME/.claude/CLAUDE.md" <<'PY'
 from pathlib import Path
 import sys
 
@@ -173,14 +142,7 @@ expected_contents = (
         "<!-- agent-hub:end -->\r\n\r\n"
         "user-owned global suffix\r\n"
     ),
-    (
-        "user-owned project text\n\n"
-        "<!-- agent-hub:begin -->\n"
-        "<!-- Managed by agent-hub. Edit in the content repo; local edits are overwritten. -->\n"
-        "Project base v1\n\n"
-        "Claude project overlay\n"
-        "<!-- agent-hub:end -->\n"
-    ),
+
 )
 for value, expected in zip(sys.argv[1:], expected_contents, strict=True):
     actual = Path(value).read_bytes()
@@ -198,9 +160,9 @@ cmp "$TMP/project-instructions.after-first-apply" "$PROJECT/CLAUDE.md"
 echo "PASS"
 
 echo "== 2b. malformed marker pairs fail without changing the file =="
-cp "$PROJECT/CLAUDE.md" "$TMP/project-instructions.valid"
+cp "$FAKE_HOME/.claude/CLAUDE.md" "$TMP/global-instructions.valid"
 for marker_case in missing-end orphan-end reversed duplicate-begin duplicate-end; do
-    python3 - "$PROJECT/CLAUDE.md" "$marker_case" <<'PY'
+    python3 - "$FAKE_HOME/.claude/CLAUDE.md" "$marker_case" <<'PY'
 from pathlib import Path
 import sys
 
@@ -225,7 +187,7 @@ cases = {
 }
 path.write_text("operator prefix\n" + cases[marker_case] + "operator suffix\n", encoding="utf-8")
 PY
-    cp "$PROJECT/CLAUDE.md" "$TMP/project-instructions.malformed"
+    cp "$FAKE_HOME/.claude/CLAUDE.md" "$TMP/global-instructions.malformed"
     set +e
     MALFORMED_STATUS_OUTPUT="$(hub status 2>&1)"
     MALFORMED_STATUS_RC=$?
@@ -236,9 +198,9 @@ PY
     test "$MALFORMED_APPLY_RC" -eq 1
     grep -Fq "missing or malformed managed markers" <<<"$MALFORMED_STATUS_OUTPUT"
     grep -Fq "malformed or duplicate managed markers" <<<"$MALFORMED_APPLY_OUTPUT"
-    cmp "$TMP/project-instructions.malformed" "$PROJECT/CLAUDE.md"
+    cmp "$TMP/global-instructions.malformed" "$FAKE_HOME/.claude/CLAUDE.md"
 done
-cp "$TMP/project-instructions.valid" "$PROJECT/CLAUDE.md"
+cp "$TMP/global-instructions.valid" "$FAKE_HOME/.claude/CLAUDE.md"
 run_hub status
 echo "PASS"
 
@@ -258,15 +220,15 @@ echo "PASS"
 echo "== 2d. apply prunes only stale repository skill symlinks =="
 mkdir -p "$TMP/external-skill"
 ln -s "$TMP/external-skill" "$FAKE_HOME/.claude/skills/foreign-skill"
-python3 - "$REPO/config/skills.toml" <<'PY'
+python3 - "$REPO/hub.toml" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 content = path.read_text(encoding="utf-8")
 content = content.replace(
-    '[global-current-machine]\nagents = ["claude"]\nmachines = ["testmachine"]',
-    '[global-current-machine]\nagents = ["claude"]\nmachines = ["other-machine"]',
+    '[skills.global-current-machine]\nagents = ["claude"]\nmachines = ["testmachine"]',
+    '[skills.global-current-machine]\nagents = ["claude"]\nmachines = ["other-machine"]',
 )
 path.write_text(content, encoding="utf-8")
 PY
@@ -288,7 +250,6 @@ echo "PASS"
 
 echo "== 3. changed instructions are stale and apply repairs them =="
 printf '\nGlobal base v2\n' >> "$REPO/instructions/global/base.md"
-printf 'remove me\n' > "$FAKE_HOME/copybot/skills/global-one/extra.txt"
 set +e
 STALE_OUTPUT="$(hub status 2>&1)"
 STALE_RC=$?
@@ -298,7 +259,6 @@ grep -Fq "[STALE]" <<<"$STALE_OUTPUT"
 run_hub apply
 assert_file_contains "$FAKE_HOME/.claude/CLAUDE.md" "Global base v2"
 assert_file_contains "$PROJECT/CLAUDE.md" "user-owned project text"
-test ! -e "$FAKE_HOME/copybot/skills/global-one/extra.txt"
 echo "PASS"
 
 echo "== 4. adopt moves a directory and leaves a repository link =="
@@ -331,7 +291,6 @@ grep -Fq "no remote configured" <<<"$HUB_OUTPUT"
 test -z "$(git -C "$REPO" status --porcelain)"
 test "$(git -C "$REPO" log -1 --pretty=%s)" = "hub sync: testmachine"
 assert_symlink_to "$FAKE_HOME/.claude/skills/new-skill" "$REPO/skills/global/new-skill"
-test -f "$FAKE_HOME/copybot/skills/adopted/SKILL.md"
 run_hub status
 echo "PASS"
 
@@ -340,7 +299,8 @@ SYNC_REMOTE="$TMP/sync-remote.git"
 SYNC_A="$TMP/sync-a"
 SYNC_B="$TMP/sync-b"
 SYNC_HOME="$TMP/sync-home"
-mkdir -p "$SYNC_HOME"
+mkdir -p "$SYNC_HOME/.config/agent-hub"
+printf 'testmachine\n' > "$SYNC_HOME/.config/agent-hub/machine"
 git clone -q --bare "$REPO" "$SYNC_REMOTE"
 git clone -q "$SYNC_REMOTE" "$SYNC_A"
 git -C "$SYNC_A" config user.name "agent-hub smoke"
@@ -348,9 +308,9 @@ git -C "$SYNC_A" config user.email "smoke@example.invalid"
 git clone -q "$SYNC_REMOTE" "$SYNC_B"
 mkdir -p "$SYNC_A/skills/global/pulled-other-machine"
 printf '# Pulled fixture\n' > "$SYNC_A/skills/global/pulled-other-machine/SKILL.md"
-cat >> "$SYNC_A/config/skills.toml" <<'EOF'
+cat >> "$SYNC_A/hub.toml" <<'EOF'
 
-[pulled-other-machine]
+[skills.pulled-other-machine]
 machines = ["other-machine"]
 EOF
 git -C "$SYNC_A" add -A
@@ -361,19 +321,18 @@ test ! -e "$SYNC_HOME/.claude/skills/pulled-other-machine"
 grep -Fq "git pull --rebase" <<<"$SYNC_OUTPUT"
 echo "PASS"
 
-echo "== 8. unknown skill machine IDs are configuration errors =="
-cat >> "$REPO/config/skills.toml" <<'EOF'
+echo "== 8. non-string skill machine IDs are configuration errors =="
+cat >> "$REPO/hub.toml" <<'EOF'
 
-[invalid-machine]
-machines = ["not-configured"]
+[skills.invalid-machine]
+machines = [42]
 EOF
 set +e
 INVALID_MACHINE_OUTPUT="$(hub status 2>&1)"
 INVALID_MACHINE_RC=$?
 set -e
 test "$INVALID_MACHINE_RC" -eq 2
-grep -Fq "key 'invalid-machine.machines'" <<<"$INVALID_MACHINE_OUTPUT"
-grep -Fq "unknown machine id 'not-configured'" <<<"$INVALID_MACHINE_OUTPUT"
+grep -Fq "machines" <<<"$INVALID_MACHINE_OUTPUT"
 echo "PASS"
 
 echo "SMOKE TEST PASSED"

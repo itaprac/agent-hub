@@ -11,7 +11,7 @@ import pytest
 
 from agenthub import config, core, operations
 
-from conftest import AGENTS_TOML, MACHINE_ID, write
+from conftest import HUB_TOML, MACHINE_ID, write
 
 
 def apply(repo: Path, dry_run: bool = False) -> core.ApplyReport:
@@ -34,9 +34,7 @@ def test_fresh_apply_deploys_symlinks_and_instructions(
     report = apply(content)
     assert report.exit_code == 0
     alpha = home / ".claude" / "skills" / "alpha"
-    beta = project / ".claude" / "skills" / "beta"
     assert alpha.is_symlink() and alpha.resolve() == content / "skills" / "global" / "alpha"
-    assert beta.is_symlink() and beta.resolve() == content / "skills" / "projects" / "demo" / "beta"
     rendered = (home / ".claude" / "CLAUDE.md").read_text(encoding="utf-8")
     assert core.BEGIN_MARKER in rendered
     assert core.MANAGED_NOTICE in rendered
@@ -48,21 +46,20 @@ def test_fresh_apply_reports_each_action(content: Path, home: Path, project: Pat
     source = content / "skills" / "global" / "alpha"
     assert levels[f"claude global/alpha: {home}/.claude/skills/alpha -> {source}"] == "link"
     assert levels[f"claude global: {home}/.claude/CLAUDE.md"] == "render"
-    assert levels[f"project absent: no path for machine '{MACHINE_ID}'"] == "skip"
 
 
 def test_second_apply_is_idempotent(content: Path) -> None:
     apply(content)
     report = apply(content)
     assert report.exit_code == 0
-    assert {check.level for check in report.checks} == {"ok", "skip"}
+    assert {check.level for check in report.checks} == {"ok"}
 
 
 def test_dry_run_changes_nothing(content: Path, home: Path) -> None:
     report = apply(content, dry_run=True)
     assert report.exit_code == 0
     assert report.dry_run is True
-    assert {check.level for check in report.checks} == {"link", "render", "skip"}
+    assert {check.level for check in report.checks} == {"link", "render"}
     assert not (home / ".claude" / "skills" / "alpha").is_symlink()
     assert not (home / ".claude" / "CLAUDE.md").exists()
 
@@ -259,7 +256,7 @@ def test_foreign_links_are_never_pruned(content: Path, home: Path, tmp_path: Pat
 # ------------------------------------------------------------------- copy mode
 
 def copy_mode(content: Path) -> None:
-    write(content / "config" / "agents.toml", AGENTS_TOML.replace('"symlink"', '"copy"'))
+    write(content / "hub.toml", HUB_TOML.replace('"symlink"', '"copy"'))
 
 
 def test_copy_mode_deploys_a_real_directory(content: Path, home: Path) -> None:

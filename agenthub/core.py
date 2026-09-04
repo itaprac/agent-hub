@@ -320,7 +320,7 @@ def apply_copy(item: SkillTarget, dry_run: bool) -> StatusCheck:
 def apply_instruction(item: InstructionTarget, dry_run: bool) -> StatusCheck:
     target = item.target
     label = target_label(item)
-    fields = {
+    fields: dict[str, Any] = {
         "kind": "instruction",
         "agent": item.agent,
         "project": item.project,
@@ -362,8 +362,8 @@ def apply_report(projection: MachineProjection, dry_run: bool = False) -> ApplyR
     checks.extend(prune_skill_links(projection, dry_run))
     for item in projection.skill_targets:
         checks.append(SKILL_APPLIERS[item.mode](item, dry_run))
-    for item in projection.instruction_targets:
-        checks.append(apply_instruction(item, dry_run))
+    for instruction in projection.instruction_targets:
+        checks.append(apply_instruction(instruction, dry_run))
     problems = sum(1 for check in checks if check.level in PROBLEM_LEVELS)
     return ApplyReport(
         machine_id=projection.machine_id,
@@ -428,7 +428,7 @@ def check_skill(item: SkillTarget) -> StatusCheck:
 def check_instruction(item: InstructionTarget) -> StatusCheck:
     target = item.target
     label = target_label(item)
-    fields = {
+    fields: dict[str, Any] = {
         "kind": "instruction",
         "agent": item.agent,
         "project": item.project,
@@ -705,8 +705,7 @@ def skill_destination(
     if not projection.has_project(project):
         return None, skill_check(
             "ERROR",
-            f"{projection.projects_config_path}: key '{project}' is missing; "
-            f"add the project before {action}",
+            f"project '{project}': project skills are not available in this version",
             name=name,
             project=project,
         )

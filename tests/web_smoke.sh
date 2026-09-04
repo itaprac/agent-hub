@@ -46,22 +46,20 @@ for leftover in ("skills", "instructions", ".claude", ".agents"):
     shutil.rmtree(repo / leftover, ignore_errors=True)
 
 (repo / "config").mkdir(parents=True, exist_ok=True)
-(repo / "config" / "hub.toml").write_text(
-    f'[machines]\n"{hostname}" = "testmachine"\n', encoding="utf-8"
-)
-(repo / "config" / "agents.toml").write_text(
-    """[claude]
-skills_global = "~/.claude/skills/{name}"
-skills_project = "{project_root}/.claude/skills/{name}"
-instructions_global = "~/.claude/CLAUDE.md"
-instructions_project = "{project_root}/CLAUDE.md"
+(repo / "hub.toml").write_text(
+    """[agents]
+enabled = ["claude"]
 mode = "symlink"
+
+[agents.claude]
+skills_global = "~/.claude/skills"
+instructions_global = "~/.claude/CLAUDE.md"
 """,
     encoding="utf-8",
 )
-(repo / "config" / "projects.toml").write_text(
-    f'[demo]\ntestmachine = "{project}"\n', encoding="utf-8"
-)
+pin = Path.home() / ".config" / "agent-hub" / "machine"
+pin.parent.mkdir(parents=True)
+pin.write_text("testmachine\n", encoding="utf-8")
 (repo / "config" / "skills.toml").write_text("", encoding="utf-8")
 (repo / "config" / "peers.toml").write_text("", encoding="utf-8")
 
@@ -171,9 +169,9 @@ test "$(json 'data["machine_id"]')" = "testmachine"
 test "$(json 'data["repo"]')" = "$REPO"
 test "$(json '"token" not in data')" = "True"
 test "$(json '[s["name"] for s in data["skills"]["global"]]')" = "['global-one']"
-test "$(json '[s["name"] for s in data["skills"]["projects"]["demo"]]')" = "['project-one']"
+test "$(json 'data["skills"]["projects"]')" = "{}"
 test "$(json '[a["name"] for a in data["agents"]]')" = "['claude']"
-test "$(json 'data["projects"][0]["available"]')" = "True"
+test "$(json 'data["projects"]')" = "[]"
 test "$(json '[i["name"] for i in data["instructions"]["global"]]')" = "['base.md', 'claude.md']"
 test "$(json '[c["name"] for c in data["config_files"]][:2]')" = "['hub.toml', 'agents.toml']"
 echo "PASS"
@@ -405,7 +403,8 @@ grep -Fq "name: web-made" "$REPO/skills/global/web-made/SKILL.md"
 printf '{"name": "web-made-project", "project": "demo"}' >"$TMP/skill.json"
 CODE="$(request POST /api/add-skill "$TMP/skill.json")"
 expect_status 200 "$CODE" "POST /api/add-skill (project)"
-test -f "$REPO/skills/projects/demo/web-made-project/SKILL.md"
+test "$(json 'data["exit_code"]')" = "1"
+test ! -e "$REPO/skills/projects/demo/web-made-project"
 
 printf '{"name": "web-made"}' >"$TMP/skill.json"
 CODE="$(request POST /api/add-skill "$TMP/skill.json")"

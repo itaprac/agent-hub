@@ -47,7 +47,7 @@ def resolve(repo: Path, requested_path: Any) -> Path:
     if any(part.startswith(".") for part in path.parts):
         raise FileError(400, f"hidden paths are not editable: {path}")
     editable_content = path.parts[0] in {"skills", "instructions"}
-    editable_config = (
+    editable_config = path.as_posix() == "hub.toml" or (
         len(path.parts) == 2
         and path.parts[0] == "config"
         and candidate.suffix.lower() == ".toml"
@@ -132,9 +132,10 @@ def _matching_revision(path: Path, revision: str | None) -> tuple[bool, int]:
 def _validate_content(repo: Path, path: Path, content: str) -> None:
     relative_path = path.relative_to(repo.resolve())
     if (
-        len(relative_path.parts) == 2
-        and relative_path.parts[0] == "config"
-        and path.suffix.lower() == ".toml"
+        relative_path.as_posix() == "hub.toml"
+        or (len(relative_path.parts) == 2
+            and relative_path.parts[0] == "config"
+            and path.suffix.lower() == ".toml")
     ):
         try:
             tomllib.loads(content)

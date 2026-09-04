@@ -81,7 +81,7 @@ def test_adopt_collision_is_refused(server: str, content: Path, home: Path) -> N
 def test_invalid_configuration_is_one_error_line_with_exit_two(
     server: str, content: Path
 ) -> None:
-    (content / "config" / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
+    (content / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
     payload = post(server, "/api/add-skill", {"name": "gamma"})
     assert payload["exit_code"] == 2
     assert [line["level"] for line in payload["lines"]] == ["ERROR"]

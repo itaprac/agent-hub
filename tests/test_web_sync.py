@@ -29,8 +29,8 @@ def test_dry_run_changes_nothing(server: str, home: Path) -> None:
 def test_invalid_configuration_is_one_error_line_with_exit_two(
     server: str, content: Path
 ) -> None:
-    (content / "config" / "agents.toml").write_text(
-        '[claude]\nmode = "hardlink"\n', encoding="utf-8"
+    (content / "hub.toml").write_text(
+        '[agents]\nmode = "hardlink"\n', encoding="utf-8"
     )
     payload = post(server, "/api/run", {"command": "sync"})
     assert payload["exit_code"] == 2

@@ -11,16 +11,17 @@ from agenthub import files, operations
 
 def test_write_read_and_delete_content_file(content: Path) -> None:
     content_operations = operations.ContentOperations(content)
-    created = content_operations.write_file("config/skills.toml", "[alpha]\n", None)
+    (content / "hub.toml").unlink()
+    created = content_operations.write_file("hub.toml", "[alpha]\n", None)
 
     assert created["created"] is True
-    opened = content_operations.read_file("config/skills.toml")
+    opened = content_operations.read_file("hub.toml")
     assert opened["content"] == "[alpha]\n"
     assert opened["revision"] == created["revision"]
 
-    deleted = content_operations.delete_file("config/skills.toml", opened["revision"])
-    assert deleted == {"path": "config/skills.toml", "deleted": True}
-    assert not (content / "config" / "skills.toml").exists()
+    deleted = content_operations.delete_file("hub.toml", opened["revision"])
+    assert deleted == {"path": "hub.toml", "deleted": True}
+    assert not (content / "hub.toml").exists()
 
 
 def test_content_file_interface_rejects_application_paths(content: Path) -> None:
@@ -33,12 +34,12 @@ def test_content_file_interface_rejects_application_paths(content: Path) -> None
 
 def test_stale_revision_does_not_replace_the_latest_file(content: Path) -> None:
     content_operations = operations.ContentOperations(content)
-    path = content / "config" / "skills.toml"
+    path = content / "hub.toml"
     path.write_text("[latest]\n", encoding="utf-8")
 
     with pytest.raises(files.FileError, match="file changed since it was opened") as error:
         content_operations.write_file(
-            "config/skills.toml", "[draft]\n", "0" * 64
+            "hub.toml", "[draft]\n", "0" * 64
         )
 
     assert error.value.status == 409
@@ -47,13 +48,13 @@ def test_stale_revision_does_not_replace_the_latest_file(content: Path) -> None:
 
 def test_invalid_toml_does_not_replace_the_file(content: Path) -> None:
     content_operations = operations.ContentOperations(content)
-    path = content / "config" / "skills.toml"
+    path = content / "hub.toml"
     path.write_text("[valid]\n", encoding="utf-8")
-    revision = content_operations.read_file("config/skills.toml")["revision"]
+    revision = content_operations.read_file("hub.toml")["revision"]
 
     with pytest.raises(files.FileError, match="invalid TOML") as error:
         content_operations.write_file(
-            "config/skills.toml", "broken = [toml\n", revision
+            "hub.toml", "broken = [toml\n", revision
         )
 
     assert error.value.status == 422

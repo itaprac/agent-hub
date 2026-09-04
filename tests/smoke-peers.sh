@@ -50,6 +50,7 @@ import sys
 repo = Path(sys.argv[1])
 port_a, port_b = sys.argv[2:]
 (repo / "config").mkdir(parents=True, exist_ok=True)
+(repo / "hub.toml").write_text("[agents]\nenabled = []\n", encoding="utf-8")
 (repo / "config" / "hub.toml").write_text(
     '[machines]\n"fixture-a" = "macmini"\n"fixture-b" = "macbook"\n',
     encoding="utf-8",
@@ -77,6 +78,10 @@ for repo in "$REPO_A" "$REPO_B"; do
     git -C "$repo" config user.name "agent-hub peers smoke"
     git -C "$repo" config user.email "smoke@example.invalid"
 done
+
+mkdir -p "$HOME_A/.config/agent-hub" "$HOME_B/.config/agent-hub"
+printf 'macmini\n' > "$HOME_A/.config/agent-hub/machine"
+printf 'macbook\n' > "$HOME_B/.config/agent-hub/machine"
 
 HOME="$HOME_A" AGENT_HUB_MACHINE=macmini AGENT_HUB_PEER_TOKEN="$TOKEN" \
     python3 "$REPO_A/web.py" --repo "$REPO_A" --host 127.0.0.1 --port "$PORT_A" --quiet \

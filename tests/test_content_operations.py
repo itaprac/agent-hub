@@ -23,7 +23,7 @@ def test_status_returns_the_structured_report(
 
     assert isinstance(report, core.StatusReport)
     assert report.command == "status"
-    assert report.problems == 4
+    assert report.problems == 2
 
 
 def test_machine_id_and_state_use_the_loaded_machine_projection(
@@ -100,7 +100,7 @@ def test_file_operations_return_revision_checked_results(
 def test_invalid_configuration_is_a_structured_report_for_every_command(
     content_operations: operations.ContentOperations, content: Path, home: Path
 ) -> None:
-    (content / "config" / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
+    (content / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
 
     reports = (
         content_operations.status(),

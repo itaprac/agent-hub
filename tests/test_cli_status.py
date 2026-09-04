@@ -68,7 +68,7 @@ def test_status_uses_the_repository_pointer(content: Path, home: Path) -> None:
 
 
 def test_unreadable_configuration_exits_two(content: Path, home: Path) -> None:
-    (content / "config" / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
+    (content / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
     result = module(home, "--repo", str(content), "status")
     assert result.returncode == 2
     assert "[ERROR]" in result.stderr

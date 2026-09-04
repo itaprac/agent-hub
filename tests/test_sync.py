@@ -106,8 +106,9 @@ def test_sync_apply_uses_the_machine_projection_pulled_in_the_same_run(
     bare = add_remote(content, tmp_path)
     checkout = second_clone(bare, tmp_path)
     write(
-        checkout / "config" / "skills.toml",
-        '[alpha]\nmachines = ["other-machine"]\n',
+        checkout / "hub.toml",
+        (checkout / "hub.toml").read_text(encoding="utf-8")
+        + '\n[skills.alpha]\nmachines = ["other-machine"]\n',
     )
     git(checkout, "add", "-A")
     git(checkout, "commit", "-q", "-m", "restrict alpha to another machine")
