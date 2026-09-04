@@ -44,7 +44,7 @@ def test_drift_exits_one(content: Path, home: Path) -> None:
 
 
 def test_unreadable_configuration_exits_two(content: Path, home: Path) -> None:
-    (content / "config" / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
+    (content / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
     result = module(home, "--repo", str(content), "apply")
     assert result.returncode == 2
     assert "[ERROR]" in result.stderr

@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         repo = resolve_repo(args.repo)
         content_operations = operations.ContentOperations(repo)
+        report: core.Report
         if args.command == "apply":
             report = content_operations.apply(dry_run=args.dry_run)
         if args.command == "status":

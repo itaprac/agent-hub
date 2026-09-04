@@ -198,7 +198,7 @@ def _source_enabled(settings: dict[str, Any], name: str) -> bool:
 
 
 def load_settings() -> dict[str, Any]:
-    settings = dict(SOURCE_DEFAULTS)
+    settings: dict[str, Any] = dict(SOURCE_DEFAULTS)
     path = _settings_path()
     if path.is_file():
         try:
@@ -653,6 +653,7 @@ def _parse_grok_line(line: str) -> list[dict[str, Any]]:
     usage = update.get("usage")
     if not isinstance(usage, dict):
         return []
+    timestamp_ms: int | None
     raw_ts = record.get("timestamp")
     if isinstance(raw_ts, (int, float)) and raw_ts > 0:
         timestamp_ms = int(raw_ts if raw_ts > 1_000_000_000_000 else raw_ts * 1000)
@@ -909,6 +910,8 @@ def _build_summary(days: int, time_zone: str | None, settings: dict[str, Any]) -
     zone, time_zone = _resolve_time_zone(time_zone)
 
     now = datetime.now(zone)
+    since_time: datetime | None
+    until_time: datetime | None
     until_day = now.date()
     if days == 1:
         since_time = now - timedelta(hours=24)

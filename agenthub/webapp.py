@@ -346,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
             days = int((query.get("days") or ["30"])[0])
         except ValueError:
             days = 30
-        time_zone = (query.get("tz") or [None])[0]
+        time_zone = query["tz"][0] if query.get("tz") else None
         local_only = (query.get("local") or ["0"])[0] == "1"
         self.send_json(
             self.peer_federation().usage(
@@ -488,9 +488,6 @@ def main(argv: list[str] | None = None) -> int:
         repo = hub_config.resolve_repo(args.repo)
     except hub_config.ConfigError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
-        return 2
-    if not (repo / "config" / "hub.toml").is_file():
-        print(f"[ERROR] {repo}: not a content repository; config/hub.toml is missing", file=sys.stderr)
         return 2
     if not WEB_ROOT.is_dir():
         print(

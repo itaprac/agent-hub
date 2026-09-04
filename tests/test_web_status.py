@@ -36,9 +36,9 @@ def test_status_exposes_the_structured_result(server: str, content: Path) -> Non
     payload = get(server, "/api/status")
     assert payload["machine_id"] == operations.ContentOperations(content).status().machine_id
     assert payload["repo"] == str(content)
-    assert payload["problems"] == 4
+    assert payload["problems"] == 2
     kinds = {check["kind"] for check in payload["checks"]}
-    assert {"project", "skill", "instruction", "git"} <= kinds
+    assert {"skill", "instruction", "git"} <= kinds
 
 
 def test_status_turns_clean_after_apply(server: str, content: Path) -> None:
@@ -57,8 +57,8 @@ def test_state_reads_the_content_repository(server: str, content: Path) -> None:
 def test_invalid_configuration_is_reported_as_a_status_error(server: str, content: Path) -> None:
     # The dashboard reads the problem from the status lines, so the request itself
     # must succeed; only /api/state fails when the fleet config cannot be read.
-    (content / "config" / "agents.toml").write_text(
-        '[claude]\nmode = "hardlink"\n', encoding="utf-8"
+    (content / "hub.toml").write_text(
+        '[agents]\nmode = "hardlink"\n', encoding="utf-8"
     )
     payload = get(server, "/api/status")
     assert payload["exit_code"] == 2
@@ -68,8 +68,8 @@ def test_invalid_configuration_is_reported_as_a_status_error(server: str, conten
 
 
 def test_invalid_configuration_fails_the_state_request(server: str, content: Path) -> None:
-    (content / "config" / "agents.toml").write_text(
-        '[claude]\nmode = "hardlink"\n', encoding="utf-8"
+    (content / "hub.toml").write_text(
+        '[agents]\nmode = "hardlink"\n', encoding="utf-8"
     )
     with pytest.raises(urllib.error.HTTPError) as error:
         urllib.request.urlopen(f"{server}/api/state", timeout=10)

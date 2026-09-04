@@ -27,7 +27,7 @@ def test_sync_deploys_and_reports_a_clean_repository(content: Path, home: Path) 
 
 
 def test_unreadable_configuration_exits_two(content: Path, home: Path) -> None:
-    (content / "config" / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
+    (content / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
     result = module(home, "--repo", str(content), "sync")
     assert result.returncode == 2
     assert "[ERROR]" in result.stderr

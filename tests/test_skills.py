@@ -30,13 +30,6 @@ def test_add_skill_creates_the_minimal_global_template(content: Path, home: Path
     assert str(skill_file) in check.text
 
 
-def test_add_skill_creates_a_project_skill(content: Path, home: Path) -> None:
-    report = core.add_skill_report(projection(content), "gamma", "demo")
-    assert report.exit_code == 0
-    assert (content / "skills" / "projects" / "demo" / "gamma" / "SKILL.md").is_file()
-    assert report.checks[0].project == "demo"
-
-
 def test_add_skill_rejects_an_unknown_project(content: Path, home: Path) -> None:
     report = core.add_skill_report(projection(content), "gamma", "nope")
     assert report.exit_code == 1
@@ -89,11 +82,11 @@ def test_adopt_moves_the_skill_and_links_back(content: Path, home: Path) -> None
     assert "hub apply" in report.checks[1].text
 
 
-def test_adopt_uses_the_explicit_name_and_project(content: Path, home: Path) -> None:
+def test_adopt_uses_the_explicit_name(content: Path, home: Path) -> None:
     source = make_source(home)
-    report = core.adopt_skill_report(projection(content), str(source), "demo", "renamed")
+    report = core.adopt_skill_report(projection(content), str(source), None, "renamed")
     assert report.exit_code == 0
-    assert (content / "skills" / "projects" / "demo" / "renamed" / "SKILL.md").is_file()
+    assert (content / "skills" / "global" / "renamed" / "SKILL.md").is_file()
 
 
 def test_adopt_rejects_a_missing_or_non_directory_source(content: Path, home: Path) -> None:

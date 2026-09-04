@@ -40,6 +40,11 @@ jobs:
           if [ -d deploy ]; then bash -n deploy/*.sh; fi
           for file in web/js/*.js; do node --check "$file"; done
 
+      - name: Check Python
+        run: |
+          ruff check agenthub tools tests
+          mypy agenthub
+
       - name: Test package
         run: python3 -m pytest
 

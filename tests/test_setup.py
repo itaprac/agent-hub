@@ -306,7 +306,7 @@ def test_macos_setup_rerun_refreshes_only_the_app_and_service(
 ) -> None:
     home = tmp_path / "home"
     secret_dir = home / ".config" / "agent-hub"
-    secret_dir.mkdir(parents=True)
+    secret_dir.mkdir(parents=True, exist_ok=True)
     token = secret_dir / "peer-token"
     token.write_text("keep-this-token\n", encoding="utf-8")
     args = (
@@ -479,7 +479,7 @@ def test_update_fast_forwards_reexecutes_and_preserves_content(
     remote_head = publish_setup_update(tmp_path, remote)
     home = tmp_path / "home"
     secret_dir = home / ".config" / "agent-hub"
-    secret_dir.mkdir(parents=True)
+    secret_dir.mkdir(parents=True, exist_ok=True)
     pointer = write_content_pointer(tmp_path, content)
     token = secret_dir / "peer-token"
     token.write_text("do-not-change\n", encoding="utf-8")
@@ -517,7 +517,7 @@ def test_linux_update_refreshes_the_app_without_a_service(
 ) -> None:
     app, remote = initialize_app_remote(tmp_path)
     remote_head = publish_setup_update(tmp_path, remote)
-    pointer = write_content_pointer(tmp_path, content)
+    write_content_pointer(tmp_path, content)
 
     result = run_setup(tmp_path, "--update")
 

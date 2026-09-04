@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.12", "mypy>=1.15"]
 
 [project.scripts]
 agent-hub = "agenthub.cli:main"
@@ -29,3 +29,12 @@ py-modules = ["hub", "usage", "web"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.setuptools.package-data]
+agenthub = ["agents.json"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+files = ["agenthub"]

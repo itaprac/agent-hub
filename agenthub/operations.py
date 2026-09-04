@@ -218,7 +218,7 @@ def _state(projection: config.MachineProjection) -> dict[str, Any]:
         }
         for agent in projection.agents
     ]
-    projects = [
+    projects: list[dict[str, Any]] = [
         {
             "name": project.name,
             "path": str(project.path) if project.path is not None else None,
