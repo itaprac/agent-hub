@@ -140,7 +140,7 @@ const command = fleetController.run("apply");
 assert.deepEqual(fleetRuns, [{ command: "apply", dryRun: true }]);
 fleetController.setDryRun(false);
 assert.equal(fleetController.view().dryRun, true);
-assert.deepEqual(fleetController.view().running, { command: "apply", dryRun: true });
+assert.deepEqual(fleetController.view().running, { command: "apply", dryRun: true, machine: null });
 const runningView = fleetController.view();
 assert.throws(() => {
   runningView.running.dryRun = false;
@@ -156,11 +156,13 @@ await timerTick();
 assert.equal(fleetRequests.length, 2);
 assert.deepEqual(fleetController.view({ loading: true }), {
   dryRun: true,
+  error: null,
   running: null,
   controlsDisabled: true,
 });
 assert.deepEqual(fleetController.view(), {
   dryRun: true,
+  error: null,
   running: null,
   controlsDisabled: false,
 });
@@ -235,22 +237,23 @@ try {
 } finally { globalThis.fetch = originalFetch; }
 console.log("PASS");
 
-console.log("== 7. Install and Update use local command payloads ==");
+console.log("== 7. Command payloads preserve the optional machine target ==");
 const installPayloads = [];
 globalThis.fetch = async (url, options) => {
   installPayloads.push({ url, payload: JSON.parse(options.body) });
   return { ok: true, headers: { get: () => "application/json" }, json: async () => ({ exit_code: 0 }) };
 };
-try { await api.install("owner/repo", "review"); await api.update(); await api.run("apply", true); }
+try { await api.install("owner/repo", "review"); await api.update(); await api.run("apply", true); await api.run("sync", false, "macbook"); }
 finally { globalThis.fetch = originalFetch; }
 assert.deepEqual(installPayloads, [
   { url: "/api/run", payload: { command: "install", source: "owner/repo", skill: "review" } },
   { url: "/api/run", payload: { command: "update" } },
   { url: "/api/run", payload: { command: "apply", dry_run: true } },
+  { url: "/api/run", payload: { command: "sync", dry_run: false, machine: "macbook" } },
 ]);
 assert.equal(api.peerRun, undefined);
 console.log("PASS");
-console.log("== 8. Fleet counts records, shows first-sync guidance, and keeps actions local ==");
+console.log("== 8. Fleet counts records and offers actions only on configured machines ==");
 // A small DOM stand-in exercises the rendered cards, not a parallel summary model.
 class FleetNode {
   constructor(tag) {
@@ -301,9 +304,59 @@ try {
   const remoteCard = cards.find((node) => !node.className.includes("is-local"));
   assert.match(renderedText(remoteCard), /laptop/);
   assert.equal(descendants(remoteCard).filter((node) => ["button", "input"].includes(node.tag)).length, 0);
+  assert.match(renderedText(remoteCard), /Remote control is not configured/);
+  renderFleet({ ...emptyFleet, fleet: { machine_id: "mini", machines: [{ ...remote, remote_control: true }] } });
+  const configuredCard = panelNodes.get("#fleet-grid").children.find((node) => node.tag === "article" && !node.className.includes("is-local"));
+  const remoteButtons = descendants(configuredCard).filter((node) => node.tag === "button");
+  assert.deepEqual(remoteButtons.map((node) => [node.title, node.disabled]), [["Publish this Store, sync on laptop, then refresh its record", false], ["Apply on laptop", false]]);
+  assert.equal(descendants(configuredCard).filter((node) => node.type === "checkbox").length, 1);
+  assert.doesNotMatch(renderedText(configuredCard), /Remote control is not configured|offline|online/);
 } finally {
   if (oldDocument === undefined) delete globalThis.document; else globalThis.document = oldDocument;
   if (oldNode === undefined) delete globalThis.Node; else globalThis.Node = oldNode;
 }
+console.log("PASS");
+console.log("== 9. Remote commands capture target and dry-run until request and refresh finish ==");
+const targetedRuns = [];
+let resolveRemoteRun;
+let resolveRemoteRefresh;
+let targetRefreshes = 0;
+const targetController = createFleetController({
+  canRun: (machine) => machine === null || ["macbook", "workstation"].includes(machine),
+  request: () => { targetRefreshes++; return new Promise((resolve) => { resolveRemoteRefresh = resolve; }); },
+});
+targetController.setRunner((command, dryRun, machine) => {
+  targetedRuns.push({ command, dryRun, machine });
+  return new Promise((resolve) => { resolveRemoteRun = resolve; });
+});
+targetController.setDryRun(true, "macbook");
+assert.equal(targetController.view().dryRun, false);
+assert.equal(targetController.view({ machine: "workstation" }).dryRun, false);
+assert.equal(await targetController.run("sync", "unconfigured"), false);
+const remoteRun = targetController.run("sync", "macbook");
+assert.deepEqual(targetedRuns, [{ command: "sync", dryRun: true, machine: "macbook" }]);
+assert.deepEqual(targetController.view().running, { command: "sync", dryRun: true, machine: "macbook" });
+assert.equal(targetController.setDryRun(false, "macbook"), false);
+assert.equal(targetController.setDryRun(true), false);
+assert.equal(await targetController.run("apply", "workstation"), false);
+assert.equal(await targetController.run("apply"), false);
+resolveRemoteRun({ exit_code: 1, lines: [{ level: "ERROR", text: "SSH connection refused" }] });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(targetRefreshes, 1);
+assert.equal(targetController.view().running.machine, "macbook");
+assert.equal(targetController.view({ machine: "macbook" }).error, "SSH connection refused");
+assert.equal(targetController.view().error, null);
+assert.equal(await targetController.run("apply"), false);
+resolveRemoteRefresh({ machines: [] });
+await remoteRun;
+assert.equal(targetController.view().running, null);
+assert.equal(targetController.view({ machine: "macbook" }).dryRun, true);
+assert.equal(targetController.view().dryRun, false);
+const localRun = targetController.run("apply");
+assert.deepEqual(targetedRuns.at(-1), { command: "apply", dryRun: false, machine: null });
+resolveRemoteRun({ exit_code: 0, lines: [] });
+await new Promise((resolve) => setImmediate(resolve));
+resolveRemoteRefresh({ machines: [] });
+await localRun;
 console.log("PASS");
 console.log("WEB STATE TEST PASSED");

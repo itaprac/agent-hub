@@ -54,7 +54,7 @@ export const api = {
   },
   usageSettings: () => request("GET", "/api/usage/settings"),
   saveUsageSettings: (payload) => request("PUT", "/api/usage/settings", payload),
-  run: (command, dryRun) => request("POST", "/api/run", { command, dry_run: Boolean(dryRun) }),
+  run: (command, dryRun, machine) => request("POST", "/api/run", { command, dry_run: Boolean(dryRun), ...(machine ? { machine } : {}) }),
   fleet: () => request("GET", "/api/fleet"),
   install: (source, skill) => request("POST", "/api/run", { command: "install", source, ...(skill ? { skill } : {}) }),
   update: (names) => request("POST", "/api/run", { command: "update", ...(names?.length ? { names } : {}) }),

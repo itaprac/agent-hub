@@ -4,6 +4,9 @@ status: accepted
 
 # The Store is `~/.agents` and Git is the only bus between Machines
 
+The local-only command rule is amended by [ADR 0004](0004-optional-ssh-remote-control.md).
+Git remains the only transport for Store content and Machine records.
+
 v1 kept a private Content repo with its own layout, five config files, a Web service on every Machine, and an HTTP federation with a shared token, and it relied on GitHub as the relay. Meanwhile the ecosystem (skills.sh and the agents it targets, Codex included) standardised on `~/.agents/skills` as the canonical skill store. For v2 we decided that the Store *is* the `~/.agents` directory turned into a Git repository, that every Machine learns about the others only through files committed in that repository, and that the transport is any Git remote. There is no daemon, no token, and no Machine-to-Machine network call in the core.
 
 ## Considered options

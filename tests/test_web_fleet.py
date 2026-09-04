@@ -14,7 +14,9 @@ def test_fleet_returns_local_identity_and_records(server, monkeypatch):
     monkeypatch.setattr(operations.fleet_records, "records", lambda repo, machine_id: records)
     with urllib.request.urlopen(f"{server}/api/fleet", timeout=5) as response:
         payload = json.loads(response.read())
-    assert payload == {"machine_id": "testmachine", "machines": records}
+    assert payload == {"machine_id": "testmachine", "machines": [
+        {**records[0], "remote_control": False}
+    ]}
 
 
 @pytest.mark.parametrize("path", ["/api/fleet", "/api/git?fetch=0"])

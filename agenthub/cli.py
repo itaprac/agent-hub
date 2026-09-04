@@ -63,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("adopt", "move an existing Skill into the Store"),
         ("timer", "control automatic synchronization"),
         ("ui", "run the Console"),
+        ("remote", "pair this Machine for remote Console actions"),
     ):
         child = subparsers.add_parser(name, help=help_text)
         _options(child, child=True)
@@ -86,6 +87,12 @@ def build_parser() -> argparse.ArgumentParser:
     commands["ui"].add_argument("--port", type=int, default=7337)
     commands["ui"].add_argument("--host", default="127.0.0.1")
     commands["ui"].add_argument("--service", choices=("on", "off", "status"))
+    remote_commands = commands["remote"].add_subparsers(dest="remote_command", required=True)
+    trust = remote_commands.add_parser("trust", help="allow a controller key to run Status, Apply, and Sync")
+    _options(trust, child=True)
+    trust.add_argument("--public-key", required=True)
+    trust.add_argument("--controller", required=True, help="controller Tailscale IPv4 address")
+    trust.add_argument("--executable", type=Path, default=Path(sys.argv[0]).absolute())
     project_commands = commands["project"].add_subparsers(
         dest="project_command", required=True
     )
@@ -133,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "migrate":
             report = store.migrate()
+        elif args.command == "remote":
+            from . import pairing
+
+            report = pairing.trust(args.public_key, args.controller, repo, args.executable)
         elif args.command == "project":
             report = store.project_link(args.path)
         elif args.command == "init":

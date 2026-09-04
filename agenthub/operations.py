@@ -11,6 +11,7 @@ from typing import Any, Callable, TypeVar, cast
 
 from . import config, core, files, gitio, skills as installed_skills
 from . import fleet as fleet_records
+from . import remote
 
 
 ReportT = TypeVar("ReportT", bound=core.Report)
@@ -71,10 +72,61 @@ class ContentOperations:
     def fleet(self) -> dict[str, Any]:
         with _serialized():
             machine_id, _ = config.resolve_machine()
+            machines = _fleet(self.repo, machine_id)
+            targets = remote.configured_machines()
             return {
                 "machine_id": machine_id,
-                "machines": _fleet(self.repo, machine_id),
+                "machines": [
+                    {**machine, "remote_control": machine["machine"] in targets
+                     and not machine["local"]}
+                    for machine in machines
+                ],
             }
+
+    def remote_run(self, machine: str, command: str, *, dry_run: bool = False) -> dict[str, Any]:
+        """Run one configured Machine action, with Store sync around remote Sync."""
+        with _serialized():
+            local_id, _ = config.resolve_machine()
+            if machine == local_id or machine not in remote.configured_machines():
+                raise remote.RemoteError("remote Machine is not configured")
+            if command not in {"apply", "sync"}:
+                raise remote.RemoteError("remote control supports only Apply and Sync")
+            remote.check(machine)
+            before = None
+            if command == "sync" and not dry_run:
+                before = core.sync_report(config.load_machine_projection(self.repo))
+                if before.exit_code:
+                    result = before.to_dict()
+                    result["target_machine"] = machine
+                    result["remote_started"] = False
+                    result["lines"].append({"level": "ERROR", "text":
+                        f"Sync on {machine} was not started: Sync on {local_id} failed"})
+                    return result
+            result = remote.run(machine, command, dry_run=dry_run)
+            result["target_machine"] = machine
+            result["remote_started"] = True
+            result["remote_exit_code"] = result["exit_code"]
+            result["lines"] = [
+                {**line, "text": f"[{machine}] {line['text']}"}
+                for line in result["lines"]
+            ]
+            if before is not None:
+                result["lines"][:0] = [
+                    {**line, "text": f"[{local_id}, before] {line['text']}"}
+                    for line in before.lines()
+                ]
+            if command == "sync" and not dry_run and result["exit_code"] == 0:
+                after = core.sync_report(config.load_machine_projection(self.repo))
+                result["refresh_exit_code"] = after.exit_code
+                result["lines"].extend(
+                    {**line, "text": f"[{local_id}, after] {line['text']}"}
+                    for line in after.lines()
+                )
+                if after.exit_code:
+                    result["exit_code"] = after.exit_code
+                    result["lines"].append({"level": "ERROR", "text":
+                        f"Sync on {machine} completed, but refreshing {local_id} failed"})
+            return result
 
     def git(self, *, fetch: bool = True) -> dict[str, Any]:
         with _serialized():

@@ -1,16 +1,18 @@
-// Fleet reads Machine records from the Store. Commands run on this machine only.
+// Fleet reads Store records. Configured machines can receive explicit commands.
 import { api } from "./api.js";
 import { $, clear, el, formatTime } from "./dom.js";
 import { store, update } from "./store.js";
 
 export function createFleetController({ request, publish = () => {}, render = () => {},
-  now = () => "", isBusy = () => false, schedule = setInterval, cancel = clearInterval }) {
-  let state = { dryRun: false, running: null };
+  now = () => "", isBusy = () => false, canRun = (machine) => machine === null,
+  schedule = setInterval, cancel = clearInterval }) {
+  let state = { dryRuns: new Map(), errors: new Map(), running: null };
   let runner = null;
   let timer = null;
   let pending = null;
-  const view = ({ busy = 0, loading = false } = {}) => Object.freeze({
-    dryRun: state.dryRun,
+  const view = ({ busy = 0, loading = false, machine = null } = {}) => Object.freeze({
+    dryRun: state.dryRuns.get(machine) || false,
+    error: state.errors.get(machine) || null,
     running: state.running ? Object.freeze({ ...state.running }) : null,
     controlsDisabled: Number(busy) > 0 || Boolean(state.running) || Boolean(loading),
   });
@@ -38,17 +40,26 @@ export function createFleetController({ request, publish = () => {}, render = ()
       timer = schedule(() => isBusy() || state.running ? false : refresh(), 60000);
     },
     setRunner(next) { runner = next; },
-    setDryRun(value) {
+    setDryRun(value, machine = null) {
       if (state.running) return false;
-      change({ dryRun: Boolean(value) });
+      change({ dryRuns: new Map(state.dryRuns).set(machine, Boolean(value)) });
       return true;
     },
-    async run(command) {
-      if (state.running || isBusy() || !runner || !["apply", "sync"].includes(command)) return false;
-      const dryRun = state.dryRun;
-      change({ running: { command, dryRun } });
-      try { await runner(command, dryRun); }
-      finally { change({ running: null }); await refresh(); }
+    async run(command, machine = null) {
+      if (state.running || isBusy() || !runner || !canRun(machine) || !["apply", "sync"].includes(command)) return false;
+      const dryRun = state.dryRuns.get(machine) || false;
+      change({ running: { command, dryRun, machine }, errors: new Map(state.errors).set(machine, null) });
+      try {
+        const result = await runner(command, dryRun, machine);
+        if (result && result.exit_code !== 0) {
+          const problem = result.lines?.find((line) => ["ERROR", "CONFLICT", "DRIFT", "MISSING"].includes(line.level));
+          change({ errors: new Map(state.errors).set(machine, problem?.text || `${command} failed; see the log.`) });
+        }
+      } catch (error) {
+        change({ errors: new Map(state.errors).set(machine, error.message) });
+      } finally {
+        try { await refresh(); } finally { change({ running: null }); }
+      }
       return true;
     },
   };
@@ -57,6 +68,9 @@ export function createFleetController({ request, publish = () => {}, render = ()
 const controller = createFleetController({
   request: () => api.fleet(), publish: update, render: () => renderFleet(store),
   now: formatTime, isBusy: () => store.busy > 0,
+  canRun: (machine) => machine === null || (store.fleet?.machines || []).some(
+    (record) => record.machine === machine && record.remote_control === true && !record.local
+  ),
 });
 export const refreshFleet = () => controller.refresh();
 export function mountFleet({ run }) {
@@ -90,12 +104,18 @@ function metaLine(key, value) {
 }
 function card(machine, view) {
   const state = machineState(machine);
-  const commands = machine.local ? ["sync", "apply"].map((command) => el("button", {
+  const target = machine.local ? null : machine.machine;
+  const controllable = machine.local || machine.remote_control === true;
+  const active = view.running?.machine === target;
+  const checkboxId = machine.local ? "dry-run" : `dry-run-${machine.machine}`;
+  const commands = controllable ? ["sync", "apply"].map((command) => el("button", {
     class: `btn${command === "apply" ? " btn-primary" : ""}`,
     disabled: view.controlsDisabled,
-    title: `agent-hub ${command}${view.dryRun ? " --dry-run" : ""} on this machine`,
-    onClick: () => controller.run(command),
-  }, [view.running?.command === command ? el("span", { class: "spin", "aria-hidden": "true" }) : null,
+    title: !machine.local && command === "sync" && !view.dryRun
+      ? `Publish this Store, sync on ${machine.machine}, then refresh its record`
+      : `${command[0].toUpperCase()}${command.slice(1)} on ${machine.machine}${view.dryRun ? " (dry-run)" : ""}`,
+    onClick: () => controller.run(command, target),
+  }, [active && view.running?.command === command ? el("span", { class: "spin", "aria-hidden": "true" }) : null,
     `${view.dryRun ? "Dry " : ""}${command[0].toUpperCase()}${command.slice(1)}`])) : [];
   return el("article", { class: `fleet${machine.local ? " is-local" : ""}` }, [
     el("div", { class: "fleet-head" }, [
@@ -110,27 +130,28 @@ function card(machine, view) {
       metaLine("last sync", recordAge(machine.age_seconds)),
       metaLine("recorded", machine.synced_at || "not recorded"),
     ]),
-    machine.local ? el("div", { class: "fleet-controls" }, [
-      el("label", { class: "switch", title: "Run Apply and Sync with --dry-run on this machine" }, [
-        el("input", { type: "checkbox", id: "dry-run", checked: view.dryRun, disabled: view.controlsDisabled,
+    view.error ? el("div", { class: "fleet-error", role: "alert", text: `Last command failed: ${view.error}` }) : null,
+    controllable ? el("div", { class: "fleet-controls" }, [
+      active ? el("span", { class: "sec-note", role: "status", text: `${view.running.command === "sync" ? "Sync" : "Apply"} on ${machine.machine}…` }) : null,
+      el("label", { class: "switch", title: `Run Apply and Sync with --dry-run on ${machine.machine}` }, [
+        el("input", { type: "checkbox", id: checkboxId, checked: view.dryRun, disabled: view.controlsDisabled,
           onChange: (event) => {
             const focused = document.activeElement === event.target;
-            controller.setDryRun(event.target.checked);
-            if (focused) $("#dry-run")?.focus();
+            controller.setDryRun(event.target.checked, target);
+            if (focused) document.getElementById(checkboxId)?.focus();
           },
         }),
         el("span", { class: "sw", "aria-hidden": "true" }),
         el("span", { text: "dry-run" }),
       ]),
       el("div", { class: "fleet-actions" }, commands),
-    ]) : null,
+    ]) : el("p", { class: "sec-note", text: "Remote control is not configured." }),
   ]);
 }
 
 export function renderFleet(snapshot) {
   const panel = $("#fleet");
   if (!panel) return;
-  const view = controller.view({ busy: snapshot.busy, loading: snapshot.fleetLoading });
   panel.classList.toggle("is-loading", Boolean(snapshot.fleetLoading));
   const records = snapshot.fleet?.machines || [];
   const machines = [...records];
@@ -153,5 +174,7 @@ export function renderFleet(snapshot) {
   if (!records.length && !snapshot.fleetError) grid.append(el("div", {
     class: "tree-empty", text: snapshot.fleetLoading ? "Loading Machine records…" : "No Machine records yet. Run sync to create this machine’s record.",
   }));
-  for (const machine of machines) grid.append(card(machine, view));
+  for (const machine of machines) grid.append(card(machine, controller.view({
+    busy: snapshot.busy, loading: snapshot.fleetLoading, machine: machine.local ? null : machine.machine,
+  })));
 }

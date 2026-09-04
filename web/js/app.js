@@ -73,7 +73,10 @@ async function runHub(label, invoke) {
       result = await invoke();
     } catch (error) {
       toast(`${label} failed: ${error.message}`, "err", 8000);
-      return null;
+      const failed = { command: label, exit_code: 1, lines: [{ level: "ERROR", text: error.message }], at: formatTime() };
+      update({ log: failed });
+      setLogOpen(true);
+      return failed;
     }
     result.at = formatTime();
     update({ log: result });
@@ -89,9 +92,13 @@ async function runHub(label, invoke) {
   });
 }
 
-function runLocal(command, dryRun) {
-  const suffix = dryRun ? " --dry-run" : "";
-  return runHub(`${command}${suffix}`, () => api.run(command, dryRun));
+function runFleetCommand(command, dryRun, machine) {
+  const target = machine || store.state?.machine_id || "this machine";
+  const label = `${command}${dryRun ? " --dry-run" : ""} on ${target}`;
+  return runHub(label, async () => {
+    const result = await api.run(command, dryRun, machine);
+    return { ...result, command: label };
+  });
 }
 
 // ------------------------------------------------------------------ workspaces
@@ -360,7 +367,7 @@ async function boot() {
 
   setupWorkspaces();
   wire();
-  mountFleet({ run: runLocal });
+  mountFleet({ run: runFleetCommand });
   mountUsage();
   mountSettings();
   subscribe(render);
