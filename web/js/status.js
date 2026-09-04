@@ -1,4 +1,4 @@
-// Parsing and rendering for hub.py output: dashboard, git pill and log drawer.
+// Parsing and rendering for agent-hub output: dashboard, git pill and log drawer.
 
 import { $, $$, clear, el, formatTime } from "./dom.js";
 import { update } from "./store.js";
@@ -17,15 +17,17 @@ const TONES = {
   DRIFT: "bad",
   STALE: "bad",
   ERROR: "bad",
+  CONFLICT: "bad",
+  warn: "warn",
 };
 
-const PROBLEMS = new Set(["MISSING", "DRIFT", "STALE", "ERROR"]);
+const PROBLEMS = new Set(["MISSING", "DRIFT", "STALE", "ERROR", "CONFLICT"]);
 const ACTIONS = new Set(["link", "copy", "prune", "render", "commit", "pull", "push"]);
 
 export const tone = (level) => TONES[level] || "plain";
 export const isProblem = (level) => PROBLEMS.has(level);
 
-// hub.py prints "<agent> <scope>[/<name>]: <target>"; git and project skips
+// agent-hub prints "<agent> <scope>[/<name>]: <target>"; git and project skips
 // use their own first token. Split that into something groupable.
 export function parseLine(line) {
   const text = line.text || "";
@@ -102,7 +104,7 @@ function renderSummary(host, result) {
     host.title = "";
     host.append(
       el("span", { class: "statusbar-verdict", text: "No status yet" }),
-      el("span", { class: "statusbar-note", text: "Press Refresh (R) to run hub.py status." })
+      el("span", { class: "statusbar-note", text: "Press Refresh (R) to run agent-hub status." })
     );
     return;
   }
@@ -148,7 +150,7 @@ function renderGroups(host, result, state, filter) {
     host.append(
       el("div", { class: "empty" }, [
         el("strong", { text: "No status yet" }),
-        "Press Refresh (R) to run hub.py status on this machine.",
+        "Press Refresh (R) to run agent-hub status on this machine.",
       ])
     );
     return;
@@ -210,7 +212,7 @@ function renderGroups(host, result, state, filter) {
     host.append(
       el("div", { class: "empty" }, [
         el("strong", { text: filter === "problems" ? "No problems" : "No output" }),
-        filter === "problems" ? "Every target matches the repository. Switch to All to see the full check list." : "hub.py status printed nothing.",
+        filter === "problems" ? "Every target matches the repository. Switch to All to see the full check list." : "agent-hub status printed nothing.",
       ])
     );
   }
@@ -245,8 +247,7 @@ export function renderLog(result) {
     return;
   }
 
-  // Peer runs carry a machine id so the drawer says where the command ran.
-  cmd.textContent = result.machine ? `${result.machine} · hub.py ${result.command}` : `hub.py ${result.command}`;
+  cmd.textContent = `agent-hub ${result.command}`;
   exit.hidden = false;
   exit.textContent = `exit ${result.exit_code}`;
   exit.className = `log-exit ${result.exit_code === 0 ? "zero" : "nonzero"}`;

@@ -1,83 +1,74 @@
 # agent-hub
 
-**One Git repository for your AI agent skills and instructions, deployed to every machine.**
+Keep AI agent Skills and instructions in one Git repository, and apply them on each Machine.
 
-[![CI](https://github.com/itaprac/agent-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/itaprac/agent-hub/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+The Store is `~/.agents`. It contains `skills/`, `AGENTS.md`, optional `agents/<agent-id>.md` overlays, private Project skills, and Machine records. The App provides a CLI, a local Console, and local Usage analytics. Python 3.11+ is required. Node is needed only for skills.sh install and update commands.
 
-You keep skills, instructions, and fleet config in one private Git repository (the Content repo). agent-hub deploys them to the paths that Claude Code, Codex, and other agents read. This repository (the App) is the engine: a CLI, a Web UI, and usage analytics. Python 3.11+, standard library only.
+## Start on the first Machine
 
-## Concepts
-
-| Term | Meaning |
-|---|---|
-| App repo | This public repository: the engine, tests, and docs. |
-| Content repo | Your private repository: skills, instructions, and fleet config. |
-| Machine | A trusted host with a stable machine ID, mapped in `config/hub.toml`. |
-| Peer | A Machine reachable from another Machine's Web UI for remote status and actions. |
-| Managed block | The region between `<!-- agent-hub:begin -->` and `<!-- agent-hub:end -->` that apply rewrites. Text outside it is never touched. |
-
-## Quick start
-
-```bash
-git clone https://github.com/itaprac/agent-hub.git && cd agent-hub
-./setup.sh
+```sh
+uv tool install git+https://github.com/itaprac/agent-hub.git
+agent-hub init --yes
+agent-hub --dry-run apply
+agent-hub apply
 ```
 
-Setup registers this Machine, installs the App into `.venv`, links a Content repo (local, cloned, or new from `example-content/`), and verifies the local Web UI. It never runs apply; review the dry-run command it prints. Every prompt has an unattended flag:
+You can use `pipx install git+https://github.com/itaprac/agent-hub.git` instead. Init keeps existing Skills and instructions. It selects detected Agents; Apply creates relative skill links and writes Managed blocks. Text outside those blocks stays unchanged.
 
-```bash
-./setup.sh --new-content ../agent-hub-content --machine workstation --non-interactive
+To sync through an existing empty Git remote, use `agent-hub init --remote git@example.com:you/agents.git --yes`, then `agent-hub sync`. The Origin can be any Git host or an SSH path to a Machine you control.
+
+## Add a second Machine
+
+```sh
+uv tool install git+https://github.com/itaprac/agent-hub.git
+agent-hub init --from git@example.com:you/agents.git --yes
+agent-hub apply
+agent-hub timer on
 ```
 
-On macOS, setup installs the `com.agenthub.web` user service on `127.0.0.1:7337`; on Linux, it prints the foreground Web command. If the service stops after a Homebrew Python upgrade, see `docs/macos-permissions.md`.
+Run `agent-hub timer on` on each Machine that should sync automatically. The optional Timer uses launchd on macOS or systemd on Linux. `agent-hub timer off` removes it. See [macOS permissions](docs/macos-permissions.md) if a background process cannot read a protected directory.
+
+## Commands
 
 | Command | Effect |
 |---|---|
-| `./setup.sh --update` | Fast-forward the App and reload the service. Never touches Content. |
-| `./setup.sh --uninstall` | Remove only the service. |
+| `agent-hub status` | Check local links, instructions, and Git state. |
+| `agent-hub status --fleet` | Read Machine records from the Store. |
+| `agent-hub apply` | Apply Skills and Managed blocks locally; use `--copy` for copies. |
+| `agent-hub sync` | Commit, pull with rebase, apply, record this Machine, and push. |
+| `agent-hub sync --prefer local` | Resolve a content conflict with the local version; `remote` selects the other version. |
+| `agent-hub install owner/repo --skill NAME` | Use skills.sh to install a Skill, then apply and commit it. |
+| `agent-hub update [NAME ...]` | Use skills.sh to update installed Skills, then apply and commit. |
+| `agent-hub add-skill NAME` | Create a Skill in the Store. |
+| `agent-hub adopt PATH` | Move an existing Skill into the Store and leave a link. |
+| `agent-hub project link PATH` | Link private Project skills into a checkout and exclude them from Git. |
+| `agent-hub add-skill NAME --project PATH` | Create a private Skill for that checkout. |
+| `agent-hub adopt PATH --project` | Adopt a Skill for its containing checkout. |
+| `agent-hub timer on\|off\|status` | Manage automatic Sync. |
+| `agent-hub ui` | Print the local Console URL and run in the foreground. |
+| `agent-hub ui --service on\|off\|status` | Manage the optional Console user service. |
+| `agent-hub migrate PATH` | Migrate a clean v1 Content repository to the Store layout. |
 
-## Usage
+Global options go first, for example `agent-hub --dry-run apply` or `agent-hub --store /path/to/store status`. `AGENT_HUB_STORE` also selects the Store. The Machine ID defaults to the short hostname; pin it in `~/.config/agent-hub/machine` if needed.
 
-```bash
-agent-hub status                 # report deployment drift and Git state
-agent-hub apply                  # deploy the Content state to agent paths
-agent-hub sync                   # commit, pull with rebase, apply, push
-agent-hub add-skill code-review  # create a skill from a template
-agent-hub adopt ~/.claude/skills/existing-skill
+## Optional configuration
+
+With no `hub.toml`, Apply uses detected Agents and all Skills. To select Agents or restrict a Skill, create `~/.agents/hub.toml`:
+
+```toml
+[agents]
+enabled = ["claude-code", "codex"]
+mode = "symlink"
+
+[skills.review]
+agents = ["claude-code"]
+machines = ["workstation"]
 ```
 
-Put global options first: `agent-hub --dry-run apply`. Use `--project NAME` with `add-skill` and `adopt` for project skills.
-
-The Web UI at `http://127.0.0.1:7337/` shows machine cards (Apply, Sync, dry-run, drift badges), usage analytics for Claude Code and Codex (Grok and Cursor optional in Settings), and editors for skills, instructions, and config. It binds to localhost and has no authentication; for access from a trusted private network, see `docs/network-exposure.md`.
-
-## Multi-machine
-
-`config/peers.toml` maps machine IDs to Web UI base URLs. The shared Peer token lives in `~/.config/agent-hub/peer-token` with mode 600, never in Git; pass it to setup with `--peer-token-file PATH` on each Machine.
-
-## Configuration
-
-These files live in your Content repo:
-
-| File | Declares |
-|---|---|
-| `config/hub.toml` | Hostname to machine ID mapping. |
-| `config/agents.toml` | Agents and the paths they support (`{name}`, `{project}`, `{project_root}`). |
-| `config/projects.toml` | Projects, with the path per machine. |
-| `config/skills.toml` | Optional `agents` and `machines` restrictions per skill. |
-| `config/peers.toml` | Web UI URL per peer Machine. |
+The Console edits Skills, instructions, overlays, and `hub.toml`. It shows installed Skill sources and Fleet freshness from Git records. It reads Usage only on the local Machine. It binds to `127.0.0.1:7337` and has no authentication. See [network exposure](docs/network-exposure.md) for access through a trusted private network.
 
 ## Development
 
-```bash
-.venv/bin/python -m pytest       # unit, HTTP contract, and release-safety tests
-node tests/web_state.mjs && node tests/web_theme.mjs
-./tests/smoke.sh && ./tests/web_smoke.sh && ./tests/smoke-peers.sh
-```
+Run `python3 -m pip install -e '.[dev]'`, then `python3 -m pytest`, `node tests/web_state.mjs`, `node tests/web_theme.mjs`, `./tests/smoke.sh`, and `./tests/web_smoke.sh`. Tests use temporary Stores and HOME directories.
 
-CI (`.github/workflows/ci.yml`) runs syntax checks, the pytest suite, the Node tests, and all three smoke suites on every supported Python version.
-
-## License
-
-MIT. See `LICENSE`.
+MIT. See [LICENSE](LICENSE).

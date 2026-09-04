@@ -57,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("apply", "link Skills and render instructions"),
         ("status", "report filesystem and Git drift"),
         ("sync", "commit, pull, apply, and push"),
+        ("install", "install Skills through skills.sh"),
+        ("update", "update Installed skills through skills.sh"),
         ("add-skill", "create a Skill"),
         ("adopt", "move an existing Skill into the Store"),
         ("timer", "control automatic synchronization"),
@@ -71,6 +73,9 @@ def build_parser() -> argparse.ArgumentParser:
     commands["apply"].add_argument("--copy", action="store_true")
     commands["sync"].add_argument("--prefer", choices=("local", "remote"))
     commands["status"].add_argument("--fleet", action="store_true")
+    commands["install"].add_argument("source")
+    commands["install"].add_argument("--skill")
+    commands["update"].add_argument("names", nargs="*")
     commands["add-skill"].add_argument("name")
     commands["add-skill"].add_argument("--project")
     commands["adopt"].add_argument("path")
@@ -139,6 +144,10 @@ def main(argv: list[str] | None = None) -> int:
             report = store.status(fleet=args.fleet)
         elif args.command == "sync":
             report = store.sync(dry_run=args.dry_run, prefer=args.prefer)
+        elif args.command == "install":
+            report = store.install(args.source, args.skill)
+        elif args.command == "update":
+            report = store.update(args.names)
         elif args.command == "add-skill":
             report = store.add_skill(args.name, args.project)
         elif args.command == "adopt":

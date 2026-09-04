@@ -42,9 +42,11 @@ export function createWorkspace(section, { title, actions = [], buildTree, onCha
   const head = el("div", { class: "sidebar-head" }, [
     el("span", { class: "sidebar-title", text: title }),
     el("span", { class: "spacer" }),
-    ...actions.map((action) => el("button", { class: "btn", text: action.label, title: action.title, onClick: action.run })),
+
   ]);
-  const sidebar = el("aside", { class: "sidebar" }, [head, search, tree]);
+  const actionBar = actions.length ? el("div", { class: "sidebar-actions" },
+    actions.map((action) => el("button", { class: "btn", text: action.label, title: action.title, onClick: action.run }))) : null;
+  const sidebar = el("aside", { class: "sidebar" }, [head, actionBar, search, tree]);
 
   clear(section);
   section.append(sidebar, editor.element);
@@ -154,6 +156,15 @@ export function createWorkspace(section, { title, actions = [], buildTree, onCha
       el("div", { class: "tree-node-row" }, [toggle, nameBtn]),
       el("div", { class: "tree-files", id: filesId }, files.map(fileItem))
     );
+    if (node.provenance) {
+      const source = node.provenance.url
+        ? el("a", { href: node.provenance.url, target: "_blank", rel: "noopener noreferrer", text: node.provenance.source })
+        : el("span", { text: node.provenance.source });
+      wrapper.append(el("div", { class: "skill-provenance" }, [
+        el("span", { class: "skill-installed", text: "Installed" }), source,
+        el("span", { text: `Updated ${node.provenance.updated}` }),
+      ]));
+    }
     return wrapper;
   }
 
@@ -203,11 +214,29 @@ export function createWorkspace(section, { title, actions = [], buildTree, onCha
 
 // ---------------------------------------------------------------- tree builders
 
+export function skillProvenance(skill) {
+  if (!skill.installed) return null;
+  const info = skill.provenance || {};
+  let url = null;
+  try {
+    const parsed = new URL(info.source_url);
+    if (["https:", "http:"].includes(parsed.protocol)) url = parsed.href;
+  } catch { /* A source can be a repository name or a local path. */ }
+  const date = info.updated_at || info.installed_at;
+  const parsedDate = date ? new Date(date) : null;
+  return {
+    source: info.source || "Source not recorded",
+    url,
+    updated: parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate.toLocaleDateString() : "not recorded",
+  };
+}
+
 function skillNodes(skills, prefix) {
   return (skills || []).map((skill) => ({
     id: `${prefix}:${skill.name}`,
     label: skill.name,
     title: skill.path,
+    provenance: skillProvenance(skill),
     meta: `${skill.files.length} file${skill.files.length === 1 ? "" : "s"}`,
     files: skill.files.map((file) => ({
       label: file.name,
@@ -249,25 +278,18 @@ function instructionFiles(entries) {
 }
 
 export function buildInstructionsTree(state) {
-  const groups = [
-    { label: "Global", files: instructionFiles(state.instructions.global) },
+  const entries = state.instructions?.global || [];
+  return [
+    { label: "Shared instructions", files: instructionFiles(entries.filter((entry) => entry.path === "AGENTS.md")) },
+    { label: "Overlays", files: instructionFiles(entries.filter((entry) => entry.path.startsWith("agents/"))) },
   ];
-  for (const project of state.projects) {
-    groups.push({
-      label: project.name,
-      note: project.available ? "" : "off-machine",
-      title: project.path || project.note,
-      files: instructionFiles(state.instructions.projects[project.name]),
-    });
-  }
-  return groups;
 }
 
 export function buildConfigTree(state) {
   return [
     {
-      label: "config/",
-      files: (state.config_files || []).map((file) => ({
+      label: "Store",
+      files: (state.config_files || []).filter((file) => file.path === "hub.toml").map((file) => ({
         label: file.name,
         path: file.path,
         exists: file.exists,

@@ -1,4 +1,4 @@
-// Thin wrapper around the web.py JSON API. Every call rejects with a readable Error.
+// Thin wrapper around the local console JSON API. Every call rejects with a readable Error.
 
 function buildHeaders(method, body) {
   const headers = {};
@@ -6,7 +6,7 @@ function buildHeaders(method, body) {
   return Object.keys(headers).length ? headers : undefined;
 }
 
-async function request(method, url, body) {
+async function performRequest(method, url, body) {
   let response;
   try {
     response = await fetch(url, {
@@ -36,6 +36,15 @@ async function request(method, url, body) {
   return payload;
 }
 
+// Store endpoints share one server lock. Queue them across all UI controllers.
+let storeQueue = Promise.resolve();
+function request(method, url, body) {
+  if (url.startsWith("/api/usage")) return performRequest(method, url, body);
+  const pending = storeQueue.then(() => performRequest(method, url, body));
+  storeQueue = pending.catch(() => {});
+  return pending;
+}
+
 export const api = {
   state: () => request("GET", "/api/state"),
   status: () => request("GET", "/api/status"),
@@ -45,15 +54,10 @@ export const api = {
   },
   usageSettings: () => request("GET", "/api/usage/settings"),
   saveUsageSettings: (payload) => request("PUT", "/api/usage/settings", payload),
-  // The UI drives apply/sync through peerRun (every machine, including this one,
-  // has a card); run() stays as the direct local endpoint from SPEC-WEB.
   run: (command, dryRun) => request("POST", "/api/run", { command, dry_run: Boolean(dryRun) }),
-  peers: () => request("GET", "/api/peers"),
-  peerRun: (machine, command, dryRun) =>
-    request("POST", `/api/peers/${encodeURIComponent(machine)}/run`, {
-      command,
-      dry_run: Boolean(dryRun),
-    }),
+  fleet: () => request("GET", "/api/fleet"),
+  install: (source, skill) => request("POST", "/api/run", { command: "install", source, ...(skill ? { skill } : {}) }),
+  update: (names) => request("POST", "/api/run", { command: "update", ...(names?.length ? { names } : {}) }),
   addSkill: (name, project) => request("POST", "/api/add-skill", { name, project: project || null }),
   adopt: (path, project, name) =>
     request("POST", "/api/adopt", { path, project: Boolean(project), name: name || null }),

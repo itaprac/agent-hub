@@ -466,38 +466,14 @@ function skeleton() {
 }
 
 function coverageStrip(summary) {
-  const byMachine = new Map();
-  for (const source of summary.sources || []) {
-    const id = source.machine || "this machine";
-    const row = byMachine.get(id) || { machine: id, ok: [], issues: [] };
-    if (source.status === "ok") row.ok.push(source);
-    else row.issues.push(source);
-    byMachine.set(id, row);
-  }
-  if (!byMachine.size) return null;
-  return el(
-    "div",
-    { class: "usage-coverage" },
-    [...byMachine.values()].map((row) => {
-      if (row.issues.length) {
-        const messages = row.issues.map((source) => {
-          const label = PROVIDER_LABEL[source.provider] || source.provider;
-          return `${label}: ${source.message || "could not report usage"}`;
-        });
-        return el("div", { class: "usage-coverage-row is-bad" }, [
-          el("span", { class: "usage-coverage-name", text: row.machine }),
-          el("span", { text: messages.join(" · ") }),
-        ]);
-      }
-      const bits = row.ok
-        .filter((source) => source.provider !== "hub")
-        .map((source) => `${PROVIDER_LABEL[source.provider] || source.provider} ${formatCount(source.scannedFiles)} files`);
-      return el("div", { class: "usage-coverage-row is-ok" }, [
-        el("span", { class: "usage-coverage-name", text: row.machine }),
-        el("span", { text: bits.join(" · ") || "ok" }),
-      ]);
-    }),
-  );
+  const sources = (summary.sources || []).filter((source) => source.provider !== "hub");
+  if (!sources.length) return null;
+  return el("div", { class: "usage-coverage" }, sources.map((source) =>
+    el("div", { class: `usage-coverage-row ${source.status === "ok" ? "is-ok" : "is-bad"}` }, [
+      el("span", { class: "usage-coverage-name", text: PROVIDER_LABEL[source.provider] || source.provider }),
+      el("span", { text: source.status === "ok" ? `${formatCount(source.scannedFiles)} local files` : source.message || "Could not report local usage" }),
+    ])
+  ));
 }
 
 function paint(snapshot) {
@@ -768,11 +744,10 @@ function paintUsagePage(root, snapshot, view) {
     notes.push(`Model rates: ${summary.pricing.status}.`);
   }
   for (const source of summary.sources || []) {
-    const who = source.machine ? `${source.machine} ` : "";
     const label = PROVIDER_LABEL[source.provider] || source.provider;
-    if (source.status === "failed") notes.push(`${who}${source.message || "could not report usage."}`);
-    else if (source.status === "missing") notes.push(`${who}${label}: ${source.message || "no transcript directory."}`);
-    else if (source.provider !== "hub") notes.push(`${who}${label}: ${formatCount(source.scannedFiles)} files, ${formatCount(source.sessions)} sessions.`);
+    if (source.status === "failed") notes.push(`${source.message || "could not report usage."}`);
+    else if (source.status === "missing") notes.push(`${label}: ${source.message || "no transcript directory."}`);
+    else if (source.provider !== "hub") notes.push(`${label}: ${formatCount(source.scannedFiles)} files, ${formatCount(source.sessions)} sessions.`);
   }
   notes.push(`Scanned in ${formatCount(summary.scanDurationMs)} ms.`);
   root.append(el("p", { class: "usage-foot", text: notes.join(" · ") }));
