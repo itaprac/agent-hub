@@ -473,7 +473,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=7337, help="TCP port (0 picks a free one)")
     parser.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
     parser.add_argument(
-        "--repo",
+        "--store", "--repo", dest="repo",
         type=Path,
         default=None,
         help=hub_config.repo_option_help(),

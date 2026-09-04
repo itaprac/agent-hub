@@ -82,13 +82,13 @@ def test_removed_managed_markers_are_stale(content: Path, home: Path) -> None:
     target.write_text("no markers here\n", encoding="utf-8")
     check = find(status(content), target)
     assert check.level == "STALE"
-    assert check.text.endswith("has missing or malformed managed markers")
+    assert check.text.endswith("has missing managed markers")
 
 
 def test_orphaned_skill_symlink_is_stale(content: Path, home: Path) -> None:
     apply(content)
     orphan = home / ".claude" / "skills" / "removed"
-    orphan.symlink_to(content / "skills" / "global" / "removed", target_is_directory=True)
+    orphan.symlink_to(content / "skills" / "removed", target_is_directory=True)
     report = status(content)
     orphaned = [check for check in report.checks if check.kind == "orphan"]
     assert len(orphaned) == 1
@@ -105,7 +105,7 @@ def test_clean_worktree_and_missing_upstream(content: Path) -> None:
 
 
 def test_uncommitted_changes_are_drift(content: Path) -> None:
-    (content / "skills" / "global" / "alpha" / "SKILL.md").write_text("# changed\n", encoding="utf-8")
+    (content / "skills" / "alpha" / "SKILL.md").write_text("# changed\n", encoding="utf-8")
     report = status(content)
     git = [check for check in report.checks if check.kind == "git"]
     assert git[0].level == "DRIFT"

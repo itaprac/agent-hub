@@ -1,4 +1,4 @@
-"""Shared fixtures: an isolated home, a fixture content repository, and a web server."""
+"""Shared fixtures: an isolated HOME, a Store, and a web server."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def project(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def content(tmp_path: Path, home: Path, project: Path) -> Path:
-    """A fixture Content repository with one global and one project skill."""
+    """A Store with one global Skill and one private Project skill."""
     repo = tmp_path / "content"
     write(repo / "hub.toml", HUB_TOML)
     # Retained only for the setup and peer commands until their v2 migration.
@@ -84,10 +84,9 @@ def content(tmp_path: Path, home: Path, project: Path) -> Path:
         repo / "config" / "hub.toml",
         f'[machines]\n"{platform.node()}" = "{MACHINE_ID}"\nunused-host = "other-machine"\n',
     )
-    write(repo / "skills" / "global" / "alpha" / "SKILL.md", "# alpha\n")
-    write(repo / "skills" / "projects" / "demo" / "beta" / "SKILL.md", "# beta\n")
-    write(repo / "instructions" / "global" / "base.md", "Global base\n")
-    write(repo / "instructions" / "projects" / "demo" / "base.md", "Project base\n")
+    write(repo / "skills" / "alpha" / "SKILL.md", "# alpha\n")
+    write(repo / "projects" / "demo" / "skills" / "beta" / "SKILL.md", "# beta\n")
+    write(repo / "AGENTS.md", "Global base\n")
 
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.name", "agent-hub tests")

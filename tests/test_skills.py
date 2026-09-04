@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from agenthub import config, core
@@ -21,7 +22,7 @@ def test_add_skill_creates_the_minimal_global_template(content: Path, home: Path
     report = core.add_skill_report(projection(content), "gamma", None)
     assert report.command == "add-skill"
     assert report.exit_code == 0
-    skill_file = content / "skills" / "global" / "gamma" / "SKILL.md"
+    skill_file = content / "skills" / "gamma" / "SKILL.md"
     assert skill_file.read_text(encoding="utf-8") == SKILL_TEMPLATE
     [check] = report.checks
     assert check.level == "ok"
@@ -46,7 +47,7 @@ def test_add_skill_rejects_a_duplicate(content: Path, home: Path) -> None:
     assert check.level == "ERROR"
     assert "already exists" in check.text
     # The existing skill is untouched.
-    assert (content / "skills" / "global" / "alpha" / "SKILL.md").read_text(
+    assert (content / "skills" / "alpha" / "SKILL.md").read_text(
         encoding="utf-8"
     ) == "# alpha\n"
 
@@ -72,10 +73,11 @@ def test_adopt_moves_the_skill_and_links_back(content: Path, home: Path) -> None
     report = core.adopt_skill_report(projection(content), str(source), None, None)
     assert report.command == "adopt"
     assert report.exit_code == 0
-    destination = content / "skills" / "global" / "local-skill"
+    destination = content / "skills" / "local-skill"
     assert (destination / "SKILL.md").is_file()
     assert source.is_symlink()
     assert source.resolve() == destination.resolve()
+    assert not os.path.isabs(os.readlink(source))
     levels = [check.level for check in report.checks]
     assert levels == ["ok", "ok"]
     assert "adopted" in report.checks[0].text
@@ -86,7 +88,7 @@ def test_adopt_uses_the_explicit_name(content: Path, home: Path) -> None:
     source = make_source(home)
     report = core.adopt_skill_report(projection(content), str(source), None, "renamed")
     assert report.exit_code == 0
-    assert (content / "skills" / "global" / "renamed" / "SKILL.md").is_file()
+    assert (content / "skills" / "renamed" / "SKILL.md").is_file()
 
 
 def test_adopt_rejects_a_missing_or_non_directory_source(content: Path, home: Path) -> None:
@@ -130,7 +132,7 @@ def test_adopt_rejects_an_unknown_project(content: Path, home: Path) -> None:
 def test_skill_directories_lists_visible_non_empty_case_insensitive(
     content: Path, home: Path
 ) -> None:
-    parent = content / "skills" / "global"
+    parent = content / "skills"
     (parent / "empty").mkdir()
     (parent / ".hidden").mkdir()
     (parent / ".hidden" / "SKILL.md").write_text("# hidden\n", encoding="utf-8")

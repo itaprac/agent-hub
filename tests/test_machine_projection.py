@@ -90,8 +90,8 @@ machines = ["{MACHINE_ID}"]
 machines = ["another-machine"]
 ''',
     )
-    write(content / "skills" / "global" / "beta" / "SKILL.md", "# beta\n")
-    write(content / "instructions" / "global" / "claude-code.md", "Claude global\n")
+    write(content / "skills" / "beta" / "SKILL.md", "# beta\n")
+    write(content / "agents" / "claude-code.md", "Claude global\n")
 
     projection = config.load_machine_projection(content)
 
@@ -111,15 +111,15 @@ machines = ["another-machine"]
             "claude-code",
             None,
             (
-                content / "instructions" / "global" / "base.md",
-                content / "instructions" / "global" / "claude-code.md",
+                content / "AGENTS.md",
+                content / "agents" / "claude-code.md",
             ),
             "Global base\n\nClaude global",
         ),
         (
             "codex",
             None,
-            (content / "instructions" / "global" / "base.md",),
+            (content / "AGENTS.md",),
             "Global base",
         ),
     ]
@@ -202,14 +202,24 @@ agents = ["first"]
 agents = ["second"]
 ''',
     )
-    write(content / "skills" / "global" / "beta" / "SKILL.md", "# beta\n")
+    write(content / "skills" / "beta" / "SKILL.md", "# beta\n")
     projection = config.load_machine_projection(content)
     directory = home / ".shared" / "skills"
     directory.mkdir(parents=True)
     for name in ("alpha", "beta"):
-        (directory / name).symlink_to(content / "skills" / "global" / name)
+        (directory / name).symlink_to(content / "skills" / name)
 
     assert list(core.iter_orphaned_skill_links(projection)) == []
     assert [(item.path, item.expected_entries) for item in projection.managed_skill_directories] == [
         (directory, frozenset({"alpha", "beta"})),
     ]
+
+
+def test_overlay_requires_global_instruction_source(content: Path) -> None:
+    (content / "AGENTS.md").unlink()
+    write(content / "agents" / "claude.md", "Claude overlay\n")
+
+    projection = config.load_machine_projection(content)
+
+    assert projection.instruction_targets == ()
+    assert [target.name for target in projection.skill_targets] == ["alpha"]

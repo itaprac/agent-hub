@@ -42,7 +42,7 @@ hostname = sys.argv[3]
 
 # The fixture starts from a copy of the real repo; drop its content trees so
 # assertions see only fixture data regardless of what the repo accumulates.
-for leftover in ("skills", "instructions", ".claude", ".agents"):
+for leftover in ("skills", "instructions", "agents", "projects", ".claude", ".agents"):
     shutil.rmtree(repo / leftover, ignore_errors=True)
 
 (repo / "config").mkdir(parents=True, exist_ok=True)
@@ -64,16 +64,15 @@ pin.write_text("testmachine\n", encoding="utf-8")
 (repo / "config" / "peers.toml").write_text("", encoding="utf-8")
 
 files = {
-    repo / "skills" / "global" / "global-one" / "SKILL.md": "# Global fixture\n",
-    repo / "skills" / "global" / "global-one" / "check.sh": "#!/bin/sh\necho before\n",
-    repo / "skills" / "projects" / "demo" / "project-one" / "SKILL.md": "# Project fixture\n",
-    repo / "instructions" / "global" / "base.md": "Global base v1\n",
-    repo / "instructions" / "projects" / "demo" / "base.md": "Project base v1\n",
+    repo / "skills" / "global-one" / "SKILL.md": "# Global fixture\n",
+    repo / "skills" / "global-one" / "check.sh": "#!/bin/sh\necho before\n",
+    repo / "projects" / "demo" / "skills" / "project-one" / "SKILL.md": "# Project fixture\n",
+    repo / "AGENTS.md": "Global base v1\n",
 }
 for path, content in files.items():
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-(repo / "skills" / "global" / "global-one" / "check.sh").chmod(0o755)
+(repo / "skills" / "global-one" / "check.sh").chmod(0o755)
 PY
 
 git -C "$REPO" init -q
@@ -172,8 +171,8 @@ test "$(json '[s["name"] for s in data["skills"]["global"]]')" = "['global-one']
 test "$(json 'data["skills"]["projects"]')" = "{}"
 test "$(json '[a["name"] for a in data["agents"]]')" = "['claude']"
 test "$(json 'data["projects"]')" = "[]"
-test "$(json '[i["name"] for i in data["instructions"]["global"]]')" = "['base.md', 'claude.md']"
-test "$(json '[c["name"] for c in data["config_files"]][:2]')" = "['hub.toml', 'agents.toml']"
+test "$(json '[i["name"] for i in data["instructions"]["global"]]')" = "['AGENTS.md']"
+test "$(json '[c["name"] for c in data["config_files"]][:2]')" = "['hub.toml']"
 echo "PASS"
 
 echo "== 3. GET /api/status returns an exit code and parsed lines =="
@@ -212,8 +211,8 @@ assert entered.wait(timeout=5)
 try:
     for operation in (
         content_operations.status,
-        lambda: content_operations.write_file("config/skills.toml", "", None),
-        lambda: content_operations.delete_file("config/skills.toml", None),
+        lambda: content_operations.write_file("hub.toml", "", None),
+        lambda: content_operations.delete_file("hub.toml", None),
     ):
         try:
             operation()
@@ -242,7 +241,7 @@ CODE="$(request POST /api/run "$TMP/run.json")"
 expect_status 200 "$CODE" "POST /api/run (apply)"
 test "$(json 'data["exit_code"]')" = "0"
 test -L "$FAKE_HOME/.claude/skills/global-one"
-test "$(readlink "$FAKE_HOME/.claude/skills/global-one")" = "$REPO/skills/global/global-one"
+test "$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$FAKE_HOME/.claude/skills/global-one")" = "$REPO/skills/global-one"
 grep -Fq "Global base v1" "$FAKE_HOME/.claude/CLAUDE.md"
 printf '{"command": "rm -rf", "dry_run": false}' >"$TMP/run.json"
 CODE="$(request POST /api/run "$TMP/run.json")"
@@ -253,7 +252,7 @@ echo "== 5. PUT and GET /api/file round-trip inside the repository =="
 python3 - "$TMP/file.json" <<'PY'
 import json, sys
 payload = {
-    "path": "instructions/projects/demo/claude.md",
+    "path": "agents/claude.md",
     "content": "Overlay written by the web UI\nżółw\n",
     "revision": None,
 }
@@ -262,38 +261,38 @@ PY
 CODE="$(request PUT /api/file "$TMP/file.json")"
 expect_status 200 "$CODE" "PUT /api/file"
 test "$(json 'data["created"]')" = "True"
-test -f "$REPO/instructions/projects/demo/claude.md"
-CODE="$(request GET "/api/file?path=instructions/projects/demo/claude.md")"
+test -f "$REPO/agents/claude.md"
+CODE="$(request GET "/api/file?path=agents/claude.md")"
 expect_status 200 "$CODE" "GET /api/file"
 test "$(json 'data["content"]')" = "$(printf 'Overlay written by the web UI\n\xc5\xbc\xc3\xb3\xc5\x82w')"
 REVISION="$(json 'data["revision"]')"
 test "${#REVISION}" -eq 64
-curl -sSI "$BASE/api/file?path=instructions/projects/demo/claude.md" | grep -Fqi "etag: \"$REVISION\""
+curl -sSI "$BASE/api/file?path=agents/claude.md" | grep -Fqi "etag: \"$REVISION\""
 
 echo "== 5b. nested directories are created on demand =="
-printf '{"path": "instructions/projects/demo/nested/note.md", "content": "x\\n", "revision": null}' >"$TMP/file.json"
+printf '{"path": "skills/global-one/nested/note.md", "content": "x\\n", "revision": null}' >"$TMP/file.json"
 CODE="$(request PUT /api/file "$TMP/file.json")"
 expect_status 200 "$CODE" "PUT /api/file (nested)"
-test -f "$REPO/instructions/projects/demo/nested/note.md"
+test -f "$REPO/skills/global-one/nested/note.md"
 REVISION="$(json 'data["revision"]')"
-printf '{"path": "instructions/projects/demo/nested/note.md", "revision": "%s"}' "$REVISION" >"$TMP/file.json"
+printf '{"path": "skills/global-one/nested/note.md", "revision": "%s"}' "$REVISION" >"$TMP/file.json"
 CODE="$(request DELETE /api/file "$TMP/file.json")"
 expect_status 200 "$CODE" "DELETE /api/file"
-test ! -e "$REPO/instructions/projects/demo/nested/note.md"
+test ! -e "$REPO/skills/global-one/nested/note.md"
 
 echo "== 5c. stale and concurrent writes are rejected =="
-printf '{"path": "instructions/projects/demo/claude.md", "content": "missing revision\\n"}' >"$TMP/file.json"
+printf '{"path": "agents/claude.md", "content": "missing revision\\n"}' >"$TMP/file.json"
 CODE="$(request PUT /api/file "$TMP/file.json")"
 expect_status 428 "$CODE" "PUT /api/file (missing revision)"
 
-CODE="$(request GET "/api/file?path=instructions/projects/demo/claude.md")"
+CODE="$(request GET "/api/file?path=agents/claude.md")"
 expect_status 200 "$CODE" "GET /api/file (before conflict)"
 REVISION="$(json 'data["revision"]')"
 python3 - "$TMP/write-a.json" "$TMP/write-b.json" "$REVISION" <<'PY'
 import json, sys
 for target, content in zip(sys.argv[1:3], ("writer A\n", "writer B\n")):
     with open(target, "w", encoding="utf-8") as handle:
-        json.dump({"path": "instructions/projects/demo/claude.md", "content": content, "revision": sys.argv[3]}, handle)
+        json.dump({"path": "agents/claude.md", "content": content, "revision": sys.argv[3]}, handle)
 PY
 curl -sS -X PUT -H "Content-Type: application/json" -H "Origin: $BASE" -H "Sec-Fetch-Site: same-origin" \
     --data-binary @"$TMP/write-a.json" -o "$TMP/write-a.body" -w '%{http_code}' "$BASE/api/file" >"$TMP/write-a.code" &
@@ -311,61 +310,61 @@ case "$CODES" in
         exit 1
         ;;
 esac
-test "$(cat "$REPO/instructions/projects/demo/claude.md")" = "writer A" -o \
-    "$(cat "$REPO/instructions/projects/demo/claude.md")" = "writer B"
-test -z "$(find "$REPO/instructions/projects/demo" -name '.claude.md.*' -print -quit)"
+test "$(cat "$REPO/agents/claude.md")" = "writer A" -o \
+    "$(cat "$REPO/agents/claude.md")" = "writer B"
+test -z "$(find "$REPO/agents" -name '.claude.md.*' -print -quit)"
 
-CODE="$(request GET "/api/file?path=instructions/projects/demo/claude.md")"
+CODE="$(request GET "/api/file?path=agents/claude.md")"
 expect_status 200 "$CODE" "GET /api/file (before stale delete)"
 REVISION="$(json 'data["revision"]')"
 python3 - "$TMP/file.json" "$REVISION" <<'PY'
 import json, sys
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
-    json.dump({"path": "instructions/projects/demo/claude.md", "content": "newer version\n", "revision": sys.argv[2]}, handle)
+    json.dump({"path": "agents/claude.md", "content": "newer version\n", "revision": sys.argv[2]}, handle)
 PY
 CODE="$(request PUT /api/file "$TMP/file.json")"
 expect_status 200 "$CODE" "PUT /api/file (before stale delete)"
-printf '{"path": "instructions/projects/demo/claude.md", "revision": "%s"}' "$REVISION" >"$TMP/file.json"
+printf '{"path": "agents/claude.md", "revision": "%s"}' "$REVISION" >"$TMP/file.json"
 CODE="$(request DELETE /api/file "$TMP/file.json")"
 expect_status 409 "$CODE" "DELETE /api/file (stale revision)"
-test "$(cat "$REPO/instructions/projects/demo/claude.md")" = "newer version"
+test "$(cat "$REPO/agents/claude.md")" = "newer version"
 
 echo "== 5d. atomic writes preserve executable permissions =="
-CODE="$(request GET "/api/file?path=skills/global/global-one/check.sh")"
+CODE="$(request GET "/api/file?path=skills/global-one/check.sh")"
 expect_status 200 "$CODE" "GET /api/file (executable)"
 REVISION="$(json 'data["revision"]')"
 python3 - "$TMP/file.json" "$REVISION" <<'PY'
 import json, sys
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
-    json.dump({"path": "skills/global/global-one/check.sh", "content": "#!/bin/sh\necho after\n", "revision": sys.argv[2]}, handle)
+    json.dump({"path": "skills/global-one/check.sh", "content": "#!/bin/sh\necho after\n", "revision": sys.argv[2]}, handle)
 PY
 CODE="$(request PUT /api/file "$TMP/file.json")"
 expect_status 200 "$CODE" "PUT /api/file (executable)"
-test -x "$REPO/skills/global/global-one/check.sh"
-test -z "$(find "$REPO/skills/global/global-one" -name '.check.sh.*' -print -quit)"
+test -x "$REPO/skills/global-one/check.sh"
+test -z "$(find "$REPO/skills/global-one" -name '.check.sh.*' -print -quit)"
 
 echo "== 5e. invalid TOML is rejected without changing the file =="
-CODE="$(request GET "/api/file?path=config/skills.toml")"
+CODE="$(request GET "/api/file?path=hub.toml")"
 expect_status 200 "$CODE" "GET /api/file (config before validation)"
 REVISION="$(json 'data["revision"]')"
 python3 - "$TMP/file.json" "$REVISION" <<'PY'
 import json, sys
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
-    json.dump({"path": "config/skills.toml", "content": "[broken\n", "revision": sys.argv[2]}, handle)
+    json.dump({"path": "hub.toml", "content": "[broken\n", "revision": sys.argv[2]}, handle)
 PY
 CODE="$(request PUT /api/file "$TMP/file.json")"
 expect_status 422 "$CODE" "PUT /api/file (invalid TOML)"
 expect_body "invalid TOML" "PUT /api/file (invalid TOML)"
 expect_body "line 1" "PUT /api/file (invalid TOML location)"
-CODE="$(request GET "/api/file?path=config/skills.toml")"
+CODE="$(request GET "/api/file?path=hub.toml")"
 expect_status 200 "$CODE" "GET /api/file (config after rejected validation)"
 test "$(json 'data["revision"]')" = "$REVISION"
-test "$(json 'data["content"]')" = ""
+test "$(json 'data["content"].startswith("[agents]")')" = "True"
 
 python3 - "$TMP/file.json" "$REVISION" <<'PY'
 import json, sys
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
-    json.dump({"path": "config/skills.toml", "content": "# valid config\n", "revision": sys.argv[2]}, handle)
+    json.dump({"path": "hub.toml", "content": "[agents]\nenabled = [\"claude\"]\n\n[agents.claude]\nskills_global = \"~/.claude/skills\"\ninstructions_global = \"~/.claude/CLAUDE.md\"\n", "revision": sys.argv[2]}, handle)
 PY
 CODE="$(request PUT /api/file "$TMP/file.json")"
 expect_status 200 "$CODE" "PUT /api/file (valid TOML)"
@@ -376,7 +375,7 @@ test "${CODE:0:1}" = "4"
 expect_body "error" "GET /api/file (traversal)"
 CODE="$(request GET "/api/file?path=/etc/passwd")"
 test "${CODE:0:1}" = "4"
-CODE="$(request GET "/api/file?path=skills/global/global-one/../../../../hub.py")"
+CODE="$(request GET "/api/file?path=skills/global-one/../../../../hub.py")"
 test "${CODE:0:1}" = "4"
 CODE="$(request GET "/api/file?path=skills/../../home/.claude/CLAUDE.md")"
 test "${CODE:0:1}" = "4"
@@ -398,13 +397,13 @@ printf '{"name": "web-made"}' >"$TMP/skill.json"
 CODE="$(request POST /api/add-skill "$TMP/skill.json")"
 expect_status 200 "$CODE" "POST /api/add-skill"
 test "$(json 'data["exit_code"]')" = "0"
-grep -Fq "name: web-made" "$REPO/skills/global/web-made/SKILL.md"
+grep -Fq "name: web-made" "$REPO/skills/web-made/SKILL.md"
 
 printf '{"name": "web-made-project", "project": "demo"}' >"$TMP/skill.json"
 CODE="$(request POST /api/add-skill "$TMP/skill.json")"
 expect_status 200 "$CODE" "POST /api/add-skill (project)"
 test "$(json 'data["exit_code"]')" = "1"
-test ! -e "$REPO/skills/projects/demo/web-made-project"
+test ! -e "$REPO/projects/demo/skills/web-made-project"
 
 printf '{"name": "web-made"}' >"$TMP/skill.json"
 CODE="$(request POST /api/add-skill "$TMP/skill.json")"
@@ -426,7 +425,7 @@ PY
 CODE="$(request POST /api/adopt "$TMP/adopt.json")"
 expect_status 200 "$CODE" "POST /api/adopt"
 test "$(json 'data["exit_code"]')" = "0"
-test -f "$REPO/skills/global/adopted/SKILL.md"
+test -f "$REPO/skills/adopted/SKILL.md"
 test -L "$FAKE_HOME/.claude/skills/adopted"
 echo "PASS"
 
@@ -522,7 +521,7 @@ grep -Fqi 'connection: close' "$TMP/unauth.headers"
 CODE="$(curl -sS -o "$BODY" -w '%{http_code}' -H 'Content-Type: application/json' \
     -H 'X-Hub-Token: web-smoke-token' --data-binary @"$TMP/run.json" "$BASE/api/run")"
 expect_status 200 "$CODE" "POST /api/run (peer token)"
-printf '{"path": "config/skills.toml", "content": ""}' >"$TMP/file.json"
+printf '{"path": "hub.toml", "content": ""}' >"$TMP/file.json"
 CODE="$(curl -sS -X PUT -o "$BODY" -w '%{http_code}' -H 'Content-Type: application/json' \
     -H 'X-Hub-Token: web-smoke-token' --data-binary @"$TMP/file.json" "$BASE/api/file")"
 expect_status 401 "$CODE" "PUT /api/file (peer token only)"

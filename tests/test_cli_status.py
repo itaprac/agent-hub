@@ -31,20 +31,20 @@ def module(home: Path, *extra: str, **environment: str) -> subprocess.CompletedP
 
 
 def test_status_reports_missing_targets_and_exits_one(content: Path, home: Path) -> None:
-    result = module(home, "--repo", str(content), "status")
+    result = module(home, "--store", str(content), "status")
     assert result.returncode == 1
     assert f"[MISSING] claude global/alpha: {home}/.claude/skills/alpha" in result.stdout
 
 
 def test_status_on_an_applied_repository_exits_zero(content: Path, home: Path) -> None:
     operations.ContentOperations(content).apply()
-    result = module(home, "--repo", str(content), "status")
+    result = module(home, "--store", str(content), "status")
     assert result.returncode == 0
     assert f"[ok] claude global/alpha: {home}/.claude/skills/alpha" in result.stdout
 
 
 def test_status_output_matches_the_structured_report(content: Path, home: Path) -> None:
-    result = module(home, "--repo", str(content), "status")
+    result = module(home, "--store", str(content), "status")
     expected = [
         f"[{check.level}] {check.text}"
         for check in operations.ContentOperations(content).status().checks
@@ -53,15 +53,13 @@ def test_status_output_matches_the_structured_report(content: Path, home: Path) 
 
 
 def test_status_uses_the_environment_override(content: Path, home: Path) -> None:
-    result = module(home, "status", AGENT_HUB_REPO=str(content))
+    result = module(home, "status", AGENT_HUB_STORE=str(content))
     assert result.returncode == 1
     assert "[MISSING] claude global/alpha" in result.stdout
 
 
-def test_status_uses_the_repository_pointer(content: Path, home: Path) -> None:
-    pointer = home / ".config" / "agent-hub" / "root"
-    pointer.parent.mkdir(parents=True, exist_ok=True)
-    pointer.write_text(f"{content}\n", encoding="utf-8")
+def test_status_uses_the_default_store_symlink(content: Path, home: Path) -> None:
+    (home / ".agents").symlink_to(content, target_is_directory=True)
     result = module(home, "status")
     assert result.returncode == 1
     assert "[MISSING] claude global/alpha" in result.stdout
@@ -69,13 +67,13 @@ def test_status_uses_the_repository_pointer(content: Path, home: Path) -> None:
 
 def test_unreadable_configuration_exits_two(content: Path, home: Path) -> None:
     (content / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
-    result = module(home, "--repo", str(content), "status")
+    result = module(home, "--store", str(content), "status")
     assert result.returncode == 2
     assert "[ERROR]" in result.stderr
 
 
 def test_compatibility_entry_point_matches_the_console_command(content: Path, home: Path) -> None:
-    shim = run([sys.executable, str(ROOT / "hub.py"), "--repo", str(content), "status"], home)
-    console = module(home, "--repo", str(content), "status")
+    shim = run([sys.executable, str(ROOT / "hub.py"), "--store", str(content), "status"], home)
+    console = module(home, "--store", str(content), "status")
     assert shim.returncode == console.returncode
     assert shim.stdout == console.stdout
