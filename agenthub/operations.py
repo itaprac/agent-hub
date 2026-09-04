@@ -37,6 +37,18 @@ class ContentOperations:
     def __init__(self, repo: Path) -> None:
         self.repo = repo
 
+    def init(
+        self,
+        *,
+        from_url: str | None = None,
+        remote: str | None = None,
+        yes: bool = False,
+    ) -> core.Report:
+        from .store import init_store
+
+        with _serialized():
+            return init_store(self.repo, from_url=from_url, remote=remote, yes=yes)
+
     def status(self) -> core.StatusReport:
         return self._report(core.StatusReport, core.status_report)
 
@@ -49,10 +61,15 @@ class ContentOperations:
             projection = config.load_machine_projection(self.repo)
             return _state(projection)
 
-    def apply(self, *, dry_run: bool = False) -> core.ApplyReport:
+    def apply(self, *, dry_run: bool = False, copy: bool = False) -> core.ApplyReport:
         return self._report(
             core.ApplyReport,
-            lambda projection: core.apply_report(projection, dry_run=dry_run),
+            lambda projection: core.apply_report(
+                config.load_machine_projection(self.repo, copy=True)
+                if copy
+                else projection,
+                dry_run=dry_run,
+            ),
             dry_run=dry_run,
             report_os_errors=True,
         )
@@ -80,9 +97,7 @@ class ContentOperations:
     ) -> core.AdoptReport:
         return self._report(
             core.AdoptReport,
-            lambda projection: core.adopt_skill_report(
-                projection, path, project, name
-            ),
+            lambda projection: core.adopt_skill_report(projection, path, project, name),
             report_os_errors=True,
         )
 
@@ -184,30 +199,6 @@ def _skills(parent: Path, repo: Path) -> list[dict[str, Any]]:
     return skills
 
 
-def _instructions(
-    directory: Path, repo: Path, agents: list[str]
-) -> list[dict[str, Any]]:
-    names = ["base.md"] + [f"{agent}.md" for agent in agents]
-    if directory.is_dir():
-        for path in sorted(directory.glob("*.md"), key=lambda item: item.name.lower()):
-            if path.name not in names:
-                names.append(path.name)
-    entries = []
-    for name in names:
-        path = directory / name
-        stem = name[:-3]
-        kind = "base" if name == "base.md" else "agent" if stem in agents else "extra"
-        entries.append(
-            {
-                "name": name,
-                "path": _relative(path, repo),
-                "exists": path.is_file(),
-                "kind": kind,
-            }
-        )
-    return entries
-
-
 def _state(projection: config.MachineProjection) -> dict[str, Any]:
     repo = projection.repo
     agents = [
@@ -234,52 +225,33 @@ def _state(projection: config.MachineProjection) -> dict[str, Any]:
         }
         for project in projection.projects
     ]
-    project_names = [project["name"] for project in projects]
-    global_agents = [
-        agent.name for agent in projection.agents if agent.instructions_global
-    ]
-    project_agents = [
-        agent.name for agent in projection.agents if agent.instructions_project
-    ]
-    skills_root = repo / "skills"
-    instructions_root = repo / "instructions"
-    config_dir = repo / "config"
-    known_configs = ["hub.toml", "agents.toml", "projects.toml", "skills.toml"]
-    if config_dir.is_dir():
-        for path in sorted(config_dir.glob("*.toml"), key=lambda item: item.name.lower()):
-            if path.name not in known_configs:
-                known_configs.append(path.name)
+    instruction_paths = [repo / "AGENTS.md"]
+    instruction_paths.extend(sorted((repo / "agents").glob("*.md")))
     return {
         "machine_id": projection.machine_id,
         "hostname": projection.hostname,
         "repo": str(repo),
         "agents": agents,
         "projects": projects,
-        "skills": {
-            "global": _skills(skills_root / "global", repo),
-            "projects": {
-                name: _skills(skills_root / "projects" / name, repo)
-                for name in project_names
-            },
-        },
+        "skills": {"global": _skills(repo / "skills", repo), "projects": {}},
         "instructions": {
-            "global": _instructions(
-                instructions_root / "global", repo, global_agents
-            ),
-            "projects": {
-                name: _instructions(
-                    instructions_root / "projects" / name, repo, project_agents
-                )
-                for name in project_names
-            },
+            "global": [
+                {
+                    "name": path.name,
+                    "path": _relative(path, repo),
+                    "exists": path.is_file(),
+                    "kind": "base" if path.name == "AGENTS.md" else "agent",
+                }
+                for path in instruction_paths
+            ],
+            "projects": {},
         },
         "config_files": [
             {
-                "name": name,
-                "path": _relative(config_dir / name, repo),
-                "exists": (config_dir / name).is_file(),
+                "name": "hub.toml",
+                "path": "hub.toml",
+                "exists": (repo / "hub.toml").is_file(),
             }
-            for name in known_configs
         ],
         "text_suffixes": sorted(files.TEXT_SUFFIXES),
         "max_file_bytes": files.MAX_FILE_BYTES,

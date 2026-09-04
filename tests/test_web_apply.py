@@ -29,7 +29,7 @@ def test_apply_deploys_through_the_package(server: str, content: Path, home: Pat
     assert payload["exit_code"] == 0
     target = home / ".claude" / "skills" / "alpha"
     assert target.is_symlink()
-    assert target.resolve() == content / "skills" / "global" / "alpha"
+    assert target.resolve() == content / "skills" / "alpha"
     assert "link" in {line["level"] for line in payload["lines"]}
 
 

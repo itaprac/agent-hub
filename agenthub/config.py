@@ -10,9 +10,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
-REPO_ENV = "AGENT_HUB_REPO"
-MACHINE_ENV = "AGENT_HUB_MACHINE"
-POINTER_RELATIVE = Path(".config") / "agent-hub" / "root"
+REPO_ENV = "AGENT_HUB_STORE"
 SAFE_NAME = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
 
 
@@ -124,63 +122,27 @@ def app_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def repo_pointer_path() -> Path:
-    """The machine-local file that records where the Content repository lives."""
-    return Path(os.path.expanduser("~")) / POINTER_RELATIVE
-
-
-def read_repo_pointer() -> str:
-    path = repo_pointer_path()
-    if not path.is_file():
-        return ""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise ConfigError(
-            f"{path}: cannot read the content repository pointer: {exc}"
-        ) from exc
-    for line in text.splitlines():
-        if line.strip():
-            return line.strip()
-    raise ConfigError(f"{path}: the content repository pointer is empty")
-
-
 def repo_option_help() -> str:
-    """The --repo help text, shared by the CLI and the web server."""
-    return f"content repository root (default: {REPO_ENV}, then the path in {repo_pointer_path()})"
+    """The Store lookup order, shared by the CLI and Console."""
+    return f"Store directory (default: {REPO_ENV}, then ~/.agents)"
 
 
-def require_directory(value: str | Path, source: str) -> Path:
-    path = Path(os.path.expanduser(str(value))).resolve()
-    if not path.is_dir():
-        raise ConfigError(f"{source}: content repository directory not found: {path}")
-    return path
-
-
-def resolve_repo(explicit: str | Path | None = None) -> Path:
-    """Find the Content repository: option, then environment, then pointer file."""
-    if explicit is not None:
-        return require_directory(explicit, "--repo")
-
-    override = os.environ.get(REPO_ENV, "").strip()
-    if override:
-        return require_directory(override, REPO_ENV)
-
-    pointer = read_repo_pointer()
-    if pointer:
-        return require_directory(pointer, str(repo_pointer_path()))
-
-    # Compatibility default for the layout where the App and the Content still
-    # share one repository. Remove this branch with the repository split, once
-    # every machine resolves its Content through the pointer file.
-    default = app_root()
-    if (default / "config" / "hub.toml").is_file():
-        return default.resolve()
-
-    raise ConfigError(
-        "no content repository configured; pass --repo PATH, set "
-        f"{REPO_ENV}, or write the path into {repo_pointer_path()}"
+def resolve_repo(explicit: str | Path | None = None, *, create: bool = False) -> Path:
+    """Resolve the Store without writing files; init may choose a missing path."""
+    value = (
+        explicit
+        if explicit is not None
+        else os.environ.get(REPO_ENV, "").strip() or "~/.agents"
     )
+    try:
+        path = expand_path(str(value)).resolve()
+    except ValueError as exc:
+        raise ConfigError(f"--store / {REPO_ENV}: {exc}") from exc
+    if not create and not path.is_dir():
+        raise ConfigError(
+            f"--store / {REPO_ENV}: Store directory not found: {path}; run 'agent-hub init'"
+        )
+    return path
 
 
 # --------------------------------------------------------------------- loading
@@ -343,7 +305,7 @@ def _skill_is_selected(
     )
 
 
-def load_machine_projection(repo: Path) -> MachineProjection:
+def load_machine_projection(repo: Path, *, copy: bool = False) -> MachineProjection:
     """Resolve selected Agents and targets for the current Machine."""
     repo = Path(repo).expanduser().resolve()
     settings = load_settings(repo)
@@ -352,7 +314,7 @@ def load_machine_projection(repo: Path) -> MachineProjection:
     agents = tuple(
         AgentProjection(
             name=agent.id,
-            mode=settings["mode"],
+            mode="copy" if copy else settings["mode"],
             skills_global=str(agent.skills_global) if agent.skills_global else None,
             skills_project=agent.skills_project,
             instructions_global=str(agent.instructions_global)
@@ -369,6 +331,7 @@ def load_machine_projection(repo: Path) -> MachineProjection:
     skill_targets = []
     instruction_targets = []
     managed: dict[Path, set[str]] = {}
+    skill_sources = skill_directories(repo / "skills")
     for agent in agents:
         if agent.skills_global and not agent.universal:
             directory = Path(agent.skills_global)
@@ -381,7 +344,7 @@ def load_machine_projection(repo: Path) -> MachineProjection:
                     directory / source.name,
                     agent.mode,
                 )
-                for source in skill_directories(repo / "skills/global")
+                for source in skill_sources
                 if _skill_is_selected(
                     settings["skills"], machine_id, source.name, agent.name
                 )
@@ -391,12 +354,12 @@ def load_machine_projection(repo: Path) -> MachineProjection:
                 managed.setdefault(directory, set()).update(
                     item.name for item in targets
                 )
-        if agent.instructions_global:
+        if agent.instructions_global and (repo / "AGENTS.md").is_file():
             sources = tuple(
                 path
                 for path in (
-                    repo / "instructions/global/base.md",
-                    repo / f"instructions/global/{agent.name}.md",
+                    repo / "AGENTS.md",
+                    repo / f"agents/{agent.name}.md",
                 )
                 if path.is_file()
             )

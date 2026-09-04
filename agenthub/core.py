@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any, TypeVar
@@ -23,7 +24,7 @@ from .config import (
 BEGIN_MARKER = "<!-- agent-hub:begin -->"
 END_MARKER = "<!-- agent-hub:end -->"
 MANAGED_NOTICE = (
-    "<!-- Managed by agent-hub. Edit in the content repo; local edits are overwritten. -->"
+    "<!-- Managed by agent-hub. Edit ~/.agents/AGENTS.md; local edits inside this block are overwritten. -->"
 )
 
 PROBLEM_LEVELS = frozenset({"MISSING", "DRIFT", "STALE", "ERROR"})
@@ -82,11 +83,18 @@ def hash_file(path: Path) -> str:
 def tree_hashes(root: Path) -> dict[str, str]:
     if not root.is_dir():
         return {}
-    return {
-        str(path.relative_to(root)): hash_file(path)
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
+    entries = {}
+    for directory, directories, files in os.walk(root, followlinks=False):
+        for name in sorted(directories + files):
+            path = Path(directory) / name
+            relative = str(path.relative_to(root))
+            if path.is_symlink():
+                entries[relative] = "link:" + os.readlink(path)
+            elif path.is_dir():
+                entries[relative] = "directory"
+            elif path.is_file():
+                entries[relative] = "file:" + hash_file(path)
+    return entries
 
 
 def same_symlink(target: Path, source: Path) -> bool:
@@ -94,7 +102,7 @@ def same_symlink(target: Path, source: Path) -> bool:
         return False
     try:
         return target.resolve(strict=False) == source.resolve(strict=False)
-    except OSError:
+    except (OSError, RuntimeError):
         return False
 
 
@@ -112,23 +120,18 @@ def render_managed(existing: str | None, content: str) -> tuple[str, bool]:
     if existing is None or existing == "":
         return block + "\n", False
 
-    begin_count = existing.count(BEGIN_MARKER)
-    end_count = existing.count(END_MARKER)
-    begin_prefix_count = existing.count("<!-- agent-hub:begin")
-    if begin_prefix_count != begin_count:
+    begins = list(re.finditer(r"(?m)^" + re.escape(BEGIN_MARKER) + r"(?=\r?$)", existing))
+    ends = list(re.finditer(r"(?m)^" + re.escape(END_MARKER) + r"(?=\r?$)", existing))
+    begin_count = existing.count("<!-- agent-hub:begin")
+    end_count = existing.count("<!-- agent-hub:end")
+    if begin_count != len(begins) or end_count != len(ends):
         return existing, True
-    if begin_count == 0 and end_count == 0:
+    if not begins and not ends:
         separator = "" if existing.endswith("\n\n") else "\n" if existing.endswith("\n") else "\n\n"
         return existing + separator + block + "\n", False
-    if begin_count != 1 or end_count != 1:
+    if len(begins) != 1 or len(ends) != 1 or begins[0].start() > ends[0].start():
         return existing, True
-
-    begin = existing.index(BEGIN_MARKER)
-    end_position = existing.find(END_MARKER, begin + len(BEGIN_MARKER))
-    if end_position < 0:
-        return existing, True
-    end = end_position + len(END_MARKER)
-    return existing[:begin] + block + existing[end:], False
+    return existing[:begins[0].start()] + block + existing[ends[0].end():], False
 
 
 # --------------------------------------------------------------------- reports
@@ -253,7 +256,9 @@ def skill_fields(item: SkillTarget) -> dict[str, Any]:
     }
 
 
-def apply_symlink(item: SkillTarget, dry_run: bool) -> StatusCheck:
+def apply_symlink(
+    item: SkillTarget, dry_run: bool, store: Path | None = None
+) -> StatusCheck:
     source = item.source
     target = item.target
     label = target_label(item)
@@ -261,10 +266,20 @@ def apply_symlink(item: SkillTarget, dry_run: bool) -> StatusCheck:
     if same_symlink(target, source):
         return StatusCheck(level="ok", text=label, **fields)
     if target.is_symlink():
+        try:
+            owned = target.resolve(strict=False).is_relative_to(
+                (store or source.parent.parent).resolve()
+            )
+        except (OSError, RuntimeError):
+            owned = False
+        if not owned:
+            return StatusCheck(
+                level="DRIFT", text=f"{label} is a foreign symlink; leave it unchanged", **fields
+            )
         if not dry_run:
             target.unlink()
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.symlink_to(source, target_is_directory=True)
+            target.symlink_to(os.path.relpath(source, target.parent), target_is_directory=True)
         return StatusCheck(level="link", text=f"replace {label} -> {source}", **fields)
     if target.exists():
         return StatusCheck(
@@ -272,7 +287,7 @@ def apply_symlink(item: SkillTarget, dry_run: bool) -> StatusCheck:
         )
     if not dry_run:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.symlink_to(source, target_is_directory=True)
+        target.symlink_to(os.path.relpath(source, target.parent), target_is_directory=True)
     return StatusCheck(level="link", text=f"{label} -> {source}", **fields)
 
 
@@ -284,6 +299,7 @@ def remove_extra_copy_paths(source: Path, target: Path) -> None:
         source_exists = source_path.exists() or source_path.is_symlink()
         same_kind = (
             source_exists
+            and not source_path.is_symlink()
             and not path.is_symlink()
             and (
                 (path.is_dir() and source_path.is_dir())
@@ -313,8 +329,22 @@ def apply_copy(item: SkillTarget, dry_run: bool) -> StatusCheck:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.mkdir(parents=True, exist_ok=True)
         remove_extra_copy_paths(source, target)
-        shutil.copytree(source, target, dirs_exist_ok=True)
+        shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
     return StatusCheck(level="copy", text=f"{label} <- {source}", **fields)
+
+
+def instruction_target_is_source(item: InstructionTarget) -> bool:
+    """Prevent a managed block from replacing any of its own source files."""
+    target = item.target
+    try:
+        return any(
+            target.resolve() == source.resolve()
+            or (target.exists() and source.exists() and target.samefile(source))
+            for source in item.sources
+        )
+    except (OSError, RuntimeError):
+        # An unreadable source identity cannot establish a safe write target.
+        return True
 
 
 def apply_instruction(item: InstructionTarget, dry_run: bool) -> StatusCheck:
@@ -326,8 +356,14 @@ def apply_instruction(item: InstructionTarget, dry_run: bool) -> StatusCheck:
         "project": item.project,
         "target": str(target),
     }
+    if instruction_target_is_source(item):
+        return StatusCheck(
+            level="DRIFT", text=f"{label} is an instruction source; leave it unchanged", **fields
+        )
     if target.is_symlink() and not target.exists():
         return StatusCheck(level="DRIFT", text=f"{label} is a broken symlink", **fields)
+    if target.is_symlink():
+        return StatusCheck(level="DRIFT", text=f"{label} is a symlink", **fields)
     if target.exists() and not target.is_file():
         return StatusCheck(level="DRIFT", text=f"{label} is not a regular file", **fields)
     if target.exists():
@@ -361,7 +397,10 @@ def apply_report(projection: MachineProjection, dry_run: bool = False) -> ApplyR
     ]
     checks.extend(prune_skill_links(projection, dry_run))
     for item in projection.skill_targets:
-        checks.append(SKILL_APPLIERS[item.mode](item, dry_run))
+        if item.mode == "symlink":
+            checks.append(apply_symlink(item, dry_run, projection.repo))
+        else:
+            checks.append(apply_copy(item, dry_run))
     for instruction in projection.instruction_targets:
         checks.append(apply_instruction(instruction, dry_run))
     problems = sum(1 for check in checks if check.level in PROBLEM_LEVELS)
@@ -435,13 +474,23 @@ def check_instruction(item: InstructionTarget) -> StatusCheck:
         "name": None,
         "target": str(target),
     }
+    if instruction_target_is_source(item):
+        return StatusCheck(
+            level="DRIFT", text=f"{label} is an instruction source; leave it unchanged", **fields
+        )
+    if target.is_symlink():
+        return StatusCheck(level="DRIFT", text=f"{label} is a symlink", **fields)
     if not target.exists():
         return StatusCheck(level="MISSING", text=label, **fields)
     if not target.is_file():
         return StatusCheck(level="DRIFT", text=f"{label} is not a regular file", **fields)
     existing = read_text_preserving_newlines(target)
     rendered, malformed = render_managed(existing, item.content)
-    if malformed or BEGIN_MARKER not in existing or END_MARKER not in existing:
+    if malformed:
+        return StatusCheck(
+            level="DRIFT", text=f"{label} has missing or malformed managed markers", **fields
+        )
+    if BEGIN_MARKER not in existing or END_MARKER not in existing:
         return StatusCheck(
             level="STALE", text=f"{label} has missing or malformed managed markers", **fields
         )
@@ -701,16 +750,10 @@ def skill_destination(
     except ValueError as exc:
         return None, skill_check("ERROR", str(exc), name=name, project=project)
     if project is None:
-        return projection.repo / "skills" / "global" / name, None
-    if not projection.has_project(project):
-        return None, skill_check(
-            "ERROR",
-            f"{projection.projects_config_path}: key '{project}' is missing; "
-            f"add the project before {action}",
-            name=name,
-            project=project,
-        )
-    return projection.repo / "skills" / "projects" / project / name, None
+        return projection.repo / "skills" / name, None
+    return None, skill_check(
+        "ERROR", f"project '{project}': project skills are not available in this version", name=name, project=project
+    )
 
 
 def add_skill_report(
@@ -771,7 +814,7 @@ def adopt_skill_report(
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(source), str(destination))
     try:
-        source.symlink_to(destination, target_is_directory=True)
+        source.symlink_to(os.path.relpath(destination, source.parent), target_is_directory=True)
     except OSError as exc:
         try:
             shutil.move(str(destination), str(source))

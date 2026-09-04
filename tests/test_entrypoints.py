@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_web_entry_points_expose_the_same_command(tmp_path: Path) -> None:
     content = tmp_path / "content"
     root = subprocess.run(
-        [sys.executable, str(ROOT / "web.py"), "--repo", str(content)],
+        [sys.executable, str(ROOT / "web.py"), "--store", str(content)],
         env=dict(os.environ, PYTHONPATH=str(ROOT)),
         text=True,
         stdout=subprocess.PIPE,
@@ -25,7 +25,7 @@ def test_web_entry_points_expose_the_same_command(tmp_path: Path) -> None:
         check=False,
     )
     installed = subprocess.run(
-        [str(Path(sys.executable).with_name("agent-hub-web")), "--repo", str(content)],
+        [str(Path(sys.executable).with_name("agent-hub-web")), "--store", str(content)],
         env=dict(os.environ, PYTHONPATH=str(ROOT)),
         text=True,
         stdout=subprocess.PIPE,
@@ -35,7 +35,7 @@ def test_web_entry_points_expose_the_same_command(tmp_path: Path) -> None:
 
     assert root.returncode == installed.returncode == 2
     assert root.stderr == installed.stderr
-    assert "content repository directory not found" in root.stderr
+    assert "Store directory not found" in root.stderr
     assert (webapp.WEB_ROOT / "index.html").is_file()
 
 

@@ -10,7 +10,9 @@ from typing import Any
 
 from . import fileio
 
-TEXT_SUFFIXES = frozenset({".md", ".toml", ".txt", ".sh", ".py", ".json", ".yaml", ".yml"})
+TEXT_SUFFIXES = frozenset(
+    {".md", ".toml", ".txt", ".sh", ".py", ".json", ".yaml", ".yml"}
+)
 MAX_FILE_BYTES = 1024 * 1024
 
 
@@ -46,7 +48,11 @@ def resolve(repo: Path, requested_path: Any) -> Path:
     path = candidate.relative_to(repo)
     if any(part.startswith(".") for part in path.parts):
         raise FileError(400, f"hidden paths are not editable: {path}")
-    editable_content = path.parts[0] in {"skills", "instructions"}
+    editable_content = (
+        path.parts[0] in {"skills", "projects", "instructions"}
+        or path.as_posix() == "AGENTS.md"
+        or (len(path.parts) == 2 and path.parts[0] == "agents" and path.suffix == ".md")
+    )
     editable_config = path.as_posix() == "hub.toml" or (
         len(path.parts) == 2
         and path.parts[0] == "config"
@@ -56,7 +62,9 @@ def resolve(repo: Path, requested_path: Any) -> Path:
         raise FileError(403, f"path is outside the editable repository areas: {path}")
     if candidate.suffix.lower() not in TEXT_SUFFIXES:
         allowed = " ".join(sorted(TEXT_SUFFIXES))
-        raise FileError(400, f"unsupported file type '{candidate.suffix}'; allowed: {allowed}")
+        raise FileError(
+            400, f"unsupported file type '{candidate.suffix}'; allowed: {allowed}"
+        )
     return candidate
 
 
@@ -70,7 +78,9 @@ def read(repo: Path, requested_path: Any) -> dict[str, Any]:
     try:
         file_stat = path.stat()
         if file_stat.st_size > MAX_FILE_BYTES:
-            raise FileError(413, f"file is larger than {MAX_FILE_BYTES} bytes: {file_stat.st_size}")
+            raise FileError(
+                413, f"file is larger than {MAX_FILE_BYTES} bytes: {file_stat.st_size}"
+            )
         data = path.read_bytes()
         content = data.decode("utf-8")
     except UnicodeError as exc:
@@ -100,7 +110,9 @@ def expected_revision(payload: dict[str, Any]) -> str | None:
     try:
         bytes.fromhex(value)
     except ValueError as exc:
-        raise FileError(400, "revision must be a SHA-256 hash or null for a new file") from exc
+        raise FileError(
+            400, "revision must be a SHA-256 hash or null for a new file"
+        ) from exc
     return value.lower()
 
 
@@ -112,7 +124,9 @@ def _current_revision(path: Path) -> tuple[str | None, int | None]:
     try:
         file_stat = path.stat()
         if file_stat.st_size > MAX_FILE_BYTES:
-            raise FileError(413, f"file is larger than {MAX_FILE_BYTES} bytes: {file_stat.st_size}")
+            raise FileError(
+                413, f"file is larger than {MAX_FILE_BYTES} bytes: {file_stat.st_size}"
+            )
         data = path.read_bytes()
         mode = stat.S_IMODE(file_stat.st_mode)
     except OSError as exc:
@@ -125,17 +139,18 @@ def _current_revision(path: Path) -> tuple[str | None, int | None]:
 def _matching_revision(path: Path, revision: str | None) -> tuple[bool, int]:
     actual, mode = _current_revision(path)
     if actual != revision:
-        raise FileError(409, "file changed since it was opened; reload it before saving")
+        raise FileError(
+            409, "file changed since it was opened; reload it before saving"
+        )
     return actual is not None, mode if mode is not None else 0o644
 
 
 def _validate_content(repo: Path, path: Path, content: str) -> None:
     relative_path = path.relative_to(repo.resolve())
-    if (
-        relative_path.as_posix() == "hub.toml"
-        or (len(relative_path.parts) == 2
-            and relative_path.parts[0] == "config"
-            and path.suffix.lower() == ".toml")
+    if relative_path.as_posix() == "hub.toml" or (
+        len(relative_path.parts) == 2
+        and relative_path.parts[0] == "config"
+        and path.suffix.lower() == ".toml"
     ):
         try:
             tomllib.loads(content)
@@ -153,7 +168,9 @@ def write(
     _validate_content(repo, path, content)
     encoded = content.encode("utf-8")
     if len(encoded) > MAX_FILE_BYTES:
-        raise FileError(413, f"content is larger than {MAX_FILE_BYTES} bytes: {len(encoded)}")
+        raise FileError(
+            413, f"content is larger than {MAX_FILE_BYTES} bytes: {len(encoded)}"
+        )
     try:
         exists, mode = _matching_revision(path, revision)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,7 +190,9 @@ def delete(repo: Path, requested_path: Any, revision: str | None) -> dict[str, A
     path = resolve(repo, requested_path)
     try:
         if path.is_dir() and not path.is_symlink():
-            raise FileError(400, f"refusing to delete a directory: {relative(path, repo)}")
+            raise FileError(
+                400, f"refusing to delete a directory: {relative(path, repo)}"
+            )
         if not path.exists() and not path.is_symlink():
             raise FileError(404, f"file not found: {relative(path, repo)}")
         _matching_revision(path, revision)
