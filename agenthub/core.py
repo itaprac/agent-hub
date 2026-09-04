@@ -616,12 +616,17 @@ def _rebasing(directory: Path) -> bool:
 
 def _remote_unreachable(detail: str) -> bool:
     text = detail.lower()
+    if any(phrase in text for phrase in (
+        "authentication failed", "permission denied", "repository not found",
+        "returned error: 401", "returned error: 403", "returned error: 404",
+        "could not read username", "invalid credentials",
+    )):
+        return False
     return any(phrase in text for phrase in (
         "could not resolve", "couldn't resolve", "could not read from remote repository",
-        "does not appear to be a git repository", "unable to access", "connection refused",
+        "does not appear to be a git repository", "connection refused",
         "connection timed out", "network is unreachable", "no route to host",
         "connection closed", "connection reset", "failed to connect", "timed out",
-        "authentication failed", "permission denied (publickey)", "repository not found",
     ))
 
 

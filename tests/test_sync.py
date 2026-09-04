@@ -272,3 +272,26 @@ def test_remote_policy_rejection_is_an_error(content: Path, tmp_path: Path) -> N
     assert not any(check.level == "warn" and "push rejected" in check.text for check in report.checks)
     assert (content / "policy-test.md").read_text() == "local content\n"
     assert git(content, "status", "--porcelain").stdout == ""
+
+
+@pytest.mark.parametrize("message", [
+    "fatal: Authentication failed",
+    "Permission denied (publickey). Could not read from remote repository",
+    "remote: Repository not found. Could not read from remote repository",
+    "fatal: unable to access origin: The requested URL returned error: 403",
+])
+def test_remote_credentials_failure_stops_before_apply(content, home, tmp_path, monkeypatch, message):
+    from agenthub import gitio
+    import subprocess
+    add_remote(content, tmp_path)
+    original = gitio.run_git
+    def failing_pull(repo, *args, **kwargs):
+        if args[:2] == ("pull", "--rebase"):
+            return subprocess.CompletedProcess(args, 128, "", message)
+        return original(repo, *args, **kwargs)
+    monkeypatch.setattr(gitio, "run_git", failing_pull)
+    report = sync(content)
+    assert report.exit_code == 1
+    assert report.problems > 0
+    assert not (home / ".claude/skills/alpha").exists()
+    assert not (content / "machines/testmachine.json").exists()
