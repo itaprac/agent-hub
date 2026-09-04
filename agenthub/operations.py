@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
 
-from . import config, core, files
+from . import config, core, files, gitio
+from . import fleet as fleet_records
 
 
 ReportT = TypeVar("ReportT", bound=core.Report)
@@ -23,7 +25,7 @@ class RepositoryBusyError(RuntimeError):
 def _serialized() -> Iterator[None]:
     if not _SERIALIZATION_LOCK.acquire(blocking=False):
         raise RepositoryBusyError(
-            "repository is busy; try again after the current operation finishes"
+            "store is busy; try again after the current operation finishes"
         )
     try:
         yield
@@ -49,8 +51,22 @@ class ContentOperations:
         with _serialized():
             return init_store(self.repo, from_url=from_url, remote=remote, yes=yes)
 
-    def status(self) -> core.StatusReport:
-        return self._report(core.StatusReport, core.status_report)
+    def status(self, *, fleet: bool = False) -> core.StatusReport:
+        return self._report(
+            core.StatusReport, lambda projection: _status(projection, fleet)
+        )
+
+    def fleet(self) -> dict[str, Any]:
+        with _serialized():
+            machine_id, _ = config.resolve_machine()
+            return {
+                "machine_id": machine_id,
+                "machines": _fleet(self.repo, machine_id),
+            }
+
+    def git(self, *, fetch: bool = True) -> dict[str, Any]:
+        with _serialized():
+            return gitio.state(self.repo, fetch=fetch)
 
     def machine_id(self) -> str:
         with _serialized():
@@ -74,10 +90,14 @@ class ContentOperations:
             report_os_errors=True,
         )
 
-    def sync(self, *, dry_run: bool = False) -> core.SyncReport:
+    def sync(
+        self, *, dry_run: bool = False, prefer: str | None = None
+    ) -> core.SyncReport:
         return self._report(
             core.SyncReport,
-            lambda projection: core.sync_report(projection, dry_run=dry_run),
+            lambda projection: core.sync_report(
+                projection, dry_run=dry_run, prefer=prefer
+            ),
             dry_run=dry_run,
             report_os_errors=True,
         )
@@ -256,3 +276,74 @@ def _state(projection: config.MachineProjection) -> dict[str, Any]:
         "text_suffixes": sorted(files.TEXT_SUFFIXES),
         "max_file_bytes": files.MAX_FILE_BYTES,
     }
+
+
+@dataclasses.dataclass(frozen=True)
+class FleetStatusReport(core.StatusReport):
+    fleet: tuple[dict[str, Any], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**super().to_dict(), "fleet": list(self.fleet)}
+
+
+def _status(
+    projection: config.MachineProjection, include_fleet: bool
+) -> core.StatusReport:
+    report = core.status_report(projection)
+    if not include_fleet:
+        return report
+    machines = _fleet(projection.repo, projection.machine_id)
+    checks = list(report.checks)
+    local_problem = False
+    for machine in machines:
+        current = machine["current"]
+        behind = machine["behind"]
+        state = (
+            "current"
+            if current
+            else f"behind {behind}"
+            if behind is not None
+            else "unknown"
+        )
+        seconds = machine["age_seconds"]
+        age = f"{int(seconds)}s ago" if seconds is not None else "unknown"
+        local = machine["local"]
+        problems = machine["problems"]
+        bad = not current or bool(problems) or bool(machine.get("error")) or bool(machine.get("status", {}).get("exit_code", 0))
+        local_problem |= local and bad
+        text = f"{machine['machine']}: {state}; {problems} problems; synced {age}"
+        if local:
+            text += "; local"
+        if machine.get("error"):
+            text += f"; {machine['error']}"
+        checks.append(
+            core.StatusCheck(
+                kind="fleet",
+                level="DRIFT" if local and bad else "warn" if bad else "ok",
+                text=text,
+            )
+        )
+    if not any(machine["local"] for machine in machines):
+        local_problem = True
+        checks.append(
+            core.StatusCheck(
+                kind="fleet",
+                level="MISSING",
+                text=f"{projection.machine_id}: no Machine record; run 'agent-hub sync'",
+            )
+        )
+    return FleetStatusReport(
+        machine_id=report.machine_id,
+        hostname=report.hostname,
+        repo=report.repo,
+        checks=tuple(checks),
+        exit_code=int(bool(report.exit_code or local_problem)),
+        fleet=tuple(machines),
+    )
+
+
+def _fleet(repo: Path, machine_id: str) -> list[dict[str, Any]]:
+    try:
+        return fleet_records.records(repo, machine_id)
+    except (ValueError, gitio.GitError) as exc:
+        raise config.ConfigError(f"{repo / 'machines'}: {exc}") from exc

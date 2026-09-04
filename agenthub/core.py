@@ -27,7 +27,7 @@ MANAGED_NOTICE = (
     "<!-- Managed by agent-hub. Edit ~/.agents/AGENTS.md; local edits inside this block are overwritten. -->"
 )
 
-PROBLEM_LEVELS = frozenset({"MISSING", "DRIFT", "STALE", "ERROR"})
+PROBLEM_LEVELS = frozenset({"MISSING", "DRIFT", "STALE", "CONFLICT", "ERROR"})
 
 
 def iter_orphaned_skill_links(projection: MachineProjection):
@@ -602,115 +602,200 @@ def git_action(
     return checks, True
 
 
-def sync_report(projection: MachineProjection, dry_run: bool = False) -> SyncReport:
-    """Commit, pull, apply, and push, then return the structured result."""
+def _rebase_directory(repo: Path) -> Path:
+    result = gitio.run_git(repo, "rev-parse", "--git-dir")
+    if result.returncode:
+        raise gitio.GitCommandError(result.stderr.strip())
+    directory = Path(result.stdout.strip())
+    return directory if directory.is_absolute() else repo / directory
+
+
+def _rebasing(directory: Path) -> bool:
+    return any((directory / name).exists() for name in ("rebase-merge", "rebase-apply"))
+
+
+def _remote_unreachable(detail: str) -> bool:
+    text = detail.lower()
+    return any(phrase in text for phrase in (
+        "could not resolve", "couldn't resolve", "could not read from remote repository",
+        "does not appear to be a git repository", "unable to access", "connection refused",
+        "connection timed out", "network is unreachable", "no route to host",
+        "connection closed", "connection reset", "failed to connect", "timed out",
+        "authentication failed", "permission denied (publickey)", "repository not found",
+    ))
+
+
+def _resolve_rebase_conflicts(repo: Path, side: str) -> bool:
+    """Resolve remaining conflicts, including modify/delete, toward one rebase side."""
+    result = gitio.run_git(repo, "ls-files", "--unmerged", "-z")
+    if result.returncode:
+        raise gitio.GitCommandError(result.stderr.strip())
+    stages: dict[str, set[str]] = {}
+    for entry in result.stdout.split("\0"):
+        if not entry:
+            continue
+        metadata, path = entry.split("\t", 1)
+        stages.setdefault(path, set()).add(metadata.split()[2])
+    if not stages:
+        return False
+    wanted_stage = "3" if side == "theirs" else "2"
+    for path, available in stages.items():
+        commands: tuple[list[str], ...]
+        if wanted_stage in available:
+            commands = (["checkout", f"--{side}", "--", path], ["add", "--", path])
+        else:
+            commands = (["rm", "-f", "--", path],)
+        for command in commands:
+            completed = gitio.run_git(repo, *command)
+            if completed.returncode:
+                raise gitio.GitCommandError(completed.stderr.strip())
+    return True
+
+
+def sync_report(
+    projection: MachineProjection, dry_run: bool = False, prefer: str | None = None
+) -> SyncReport:
+    """Commit, pull, apply, record this Machine, and push under the caller's lock."""
+    from . import fleet
+
     repo = projection.repo
-    # The report keeps the identity that made the commit, not the reloaded one.
-    machine_id = projection.machine_id
-    hostname = projection.hostname
+    machine_id, hostname = projection.machine_id, projection.hostname
     checks: list[StatusCheck] = []
+    started_pull = False
+    directory: Path | None = None
+
+    def note(level: str, text: str, kind: str = "git") -> None:
+        checks.append(StatusCheck(kind=kind, level=level, text=one_line(text), target=str(repo)))
 
     def report(exit_code: int) -> SyncReport:
-        return SyncReport(
-            machine_id=machine_id,
-            hostname=hostname,
-            repo=str(repo),
-            checks=tuple(checks),
-            exit_code=exit_code,
-            dry_run=dry_run,
-        )
+        return SyncReport(machine_id=machine_id, hostname=hostname, repo=str(repo),
+                          checks=tuple(checks), exit_code=exit_code, dry_run=dry_run)
 
-    def git_check(level: str, text: str) -> StatusCheck:
-        return StatusCheck(kind="git", level=level, text=text, target=str(repo))
+    def action(*args: str) -> None:
+        completed = gitio.run_git(repo, *args, timeout=60)
+        if completed.returncode:
+            raise gitio.GitCommandError(completed.stderr.strip() or completed.stdout.strip())
 
-    if not gitio.is_repository(repo):
-        checks.append(git_check("ERROR", f"git: {repo} is not a git repository"))
-        return report(1)
     try:
+        if prefer not in (None, "local", "remote"):
+            raise ValueError("prefer must be 'local' or 'remote'")
+        if not gitio.is_repository(repo):
+            raise ValueError(f"{repo} is not a Git repository")
+        directory = _rebase_directory(repo)
+        if _rebasing(directory) or any((directory / name).exists() for name in (
+            "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "sequencer"
+        )):
+            raise ValueError("Store has an unfinished Git operation; finish it before sync")
         dirty, _ = gitio.dirty(repo)
-    except RuntimeError as exc:
-        checks.append(git_check("ERROR", f"git: {one_line(str(exc))}"))
-        return report(1)
-
-    if dirty:
-        message = f"hub sync: {machine_id}"
-        if dry_run:
-            checks.append(
-                git_check("commit", f"would run git add -A and commit: {message}")
-            )
+        if dirty:
+            message = f"sync: {machine_id}"
+            if dry_run:
+                note("ok", f"would run git add -A and commit: {message}")
+            else:
+                action("add", "-A")
+                action("commit", "-m", message)
+                note("ok", f"git commit: {message}")
         else:
-            action_checks, ok = git_action(repo, ["add", "-A"], "git add -A")
-            checks.extend(action_checks)
-            if not ok:
-                return report(1)
-            action_checks, ok = git_action(
-                repo, ["commit", "-m", message], f"git commit: {message}"
-            )
-            checks.extend(action_checks)
-            if not ok:
-                return report(1)
-    else:
-        checks.append(git_check("ok", "git: nothing to commit"))
-
-    remotes = gitio.remotes(repo)
-    upstream = gitio.upstream(repo)
-    if remotes and upstream:
-        if dry_run:
-            checks.append(
-                git_check("pull", f"would run git pull --rebase from {upstream}")
-            )
+            note("ok", "git: nothing to commit")
+        upstream = gitio.upstream(repo)
+        remotes = gitio.remotes(repo)
+        reachable = True
+        if remotes and upstream:
+            if dry_run:
+                note("ok", f"would run git pull --rebase from {upstream}")
+            else:
+                try:
+                    started_pull = True
+                    pulled = gitio.run_git(repo, "pull", "--rebase", timeout=60)
+                except gitio.GitCommandError as exc:
+                    if _rebasing(directory) or not _remote_unreachable(str(exc)):
+                        raise
+                    reachable = False
+                    note("warn", f"origin unreachable; push pending: {exc}")
+                else:
+                    if pulled.returncode and _rebasing(directory):
+                        conflict = gitio.run_git(repo, "diff", "--name-only", "--diff-filter=U")
+                        paths = ", ".join(conflict.stdout.splitlines()) or "unknown files"
+                        action("rebase", "--abort")
+                        if prefer is None:
+                            note("CONFLICT", f"sync conflict in {paths}; pull aborted; apply was not run")
+                            return report(1)
+                        side = "theirs" if prefer == "local" else "ours"
+                        retried = gitio.run_git(repo, "pull", "--rebase", f"-X{side}", timeout=60)
+                        while retried.returncode and _rebasing(directory):
+                            if not _resolve_rebase_conflicts(repo, side):
+                                break
+                            retried = gitio.run_git(repo, "-c", "core.editor=true", "rebase", "--continue", timeout=60)
+                        if retried.returncode:
+                            if _rebasing(directory):
+                                action("rebase", "--abort")
+                            note("CONFLICT", f"could not resolve {paths} with --prefer {prefer}; apply was not run")
+                            return report(1)
+                        note("ok", f"resolved pull conflicts with --prefer {prefer}")
+                    elif pulled.returncode:
+                        detail = pulled.stderr.strip() or pulled.stdout.strip()
+                        if _remote_unreachable(detail):
+                            reachable = False
+                            note("warn", f"origin unreachable; push pending: {detail}")
+                        else:
+                            raise gitio.GitCommandError(f"pull failed; apply was not run: {detail}")
+                    else:
+                        note("ok", "git pull --rebase")
+        elif not remotes:
+            note("skip", "no remote; pull and push disabled")
         else:
-            action_checks, ok = git_action(
-                repo, ["pull", "--rebase"], "git pull --rebase"
-            )
-            checks.extend(action_checks)
-            if not ok:
-                checks.append(
-                    git_check(
-                        "ERROR",
-                        "sync stopped after pull/rebase failure; apply and push were not run",
-                    )
-                )
-                return report(1)
-    elif not remotes:
-        checks.append(
-            git_check("skip", "git: no remote configured; pull and push disabled")
-        )
-    else:
-        checks.append(
-            git_check(
-                "skip", "git: remote exists but no upstream is configured; pull disabled"
-            )
-        )
-
-    # The pull may have changed config/, so apply must not use the context
-    # loaded before it (a freshly pulled skills.toml restriction would be
-    # invisible while the new skill directory is already on disk).
-    if not dry_run:
-        try:
+            note("skip", "no upstream configured; pull and push disabled")
+        if not dry_run:
             projection = load_machine_projection(repo)
-        except ConfigError as exc:
-            checks.append(
-                StatusCheck(
-                    kind="config",
-                    level="ERROR",
-                    text=one_line(str(exc)),
-                    target=str(repo),
-                )
-            )
-            return report(1)
-
-    applied = apply_report(projection, dry_run=dry_run)
-    checks.extend(applied.checks)
-
-    push_ok = True
-    if remotes:
+        applied = apply_report(projection, dry_run=dry_run)
+        checks.extend(applied.checks)
         if dry_run:
-            checks.append(git_check("push", "would run git push"))
+            note("ok", "would update the Machine record if changed or older than 24 hours", "machine")
         else:
-            action_checks, push_ok = git_action(repo, ["push"], "git push")
-            checks.extend(action_checks)
-    return report(1 if applied.exit_code or not push_ok else 0)
+            head = gitio.run_git(repo, "rev-parse", "HEAD")
+            if head.returncode:
+                raise gitio.GitCommandError(head.stderr.strip())
+            written = fleet.write_record(
+                repo, machine_id=machine_id, hostname=hostname,
+                agents=[agent.name for agent in projection.agents], head=head.stdout.strip(),
+                exit_code=applied.exit_code, problems=applied.problems,
+            )
+            if written:
+                action("add", "--", f"machines/{machine_id}.json")
+                action("commit", "-m", f"machine: {machine_id}")
+                note("ok", f"recorded Machine {machine_id}", "machine")
+            else:
+                note("ok", f"Machine {machine_id} record unchanged", "machine")
+        if remotes and upstream and reachable:
+            if dry_run:
+                note("ok", "would run git push")
+            else:
+                try:
+                    pushed = gitio.run_git(repo, "push", timeout=60)
+                except gitio.GitCommandError as exc:
+                    if _rebasing(directory) or not _remote_unreachable(str(exc)):
+                        raise
+                    note("warn", f"origin unreachable; push pending: {exc}")
+                else:
+                    if pushed.returncode:
+                        detail = pushed.stderr.strip() or pushed.stdout.strip()
+                        if _remote_unreachable(detail):
+                            note("warn", f"origin unreachable; push pending: {detail}")
+                        elif "non-fast-forward" in detail.lower() or ("[rejected]" in detail.lower() and "(fetch first)" in detail.lower()):
+                            note("warn", f"push rejected; push pending: {detail}")
+                        else:
+                            raise gitio.GitCommandError(f"push failed: {detail}")
+                    else:
+                        note("ok", "git push")
+        return report(applied.exit_code)
+    except (ConfigError, ValueError, OSError, RuntimeError) as exc:
+        if started_pull and directory is not None and _rebasing(directory):
+            try:
+                action("rebase", "--abort")
+            except (OSError, RuntimeError) as abort_error:
+                note("ERROR", f"could not abort this sync rebase: {abort_error}")
+        note("ERROR", str(exc))
+        return report(1)
 
 
 # ---------------------------------------------------------------------- skills

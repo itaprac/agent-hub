@@ -61,6 +61,8 @@ def test_usage_returns_finished_rollups_and_server_defaults(server: str, home: P
     payload = get(server, "/api/usage?days=7&tz=UTC")
 
     assert payload["timeZone"] == "UTC"
+    assert "machines" not in payload
+    assert "byMachine" not in payload["rollups"]
     assert payload["settings"] == {
         "claude": True,
         "codex": True,

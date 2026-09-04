@@ -14,6 +14,8 @@ export GIT_AUTHOR_EMAIL="smoke@example.invalid"
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
 export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 STORE="$HOME/.agents"
+mkdir -p "$HOME/.config/agent-hub"
+printf 'first-machine\n' > "$HOME/.config/agent-hub/machine"
 mkdir -p "$STORE" "$HOME/.claude/skills/claude-local" "$HOME/.cursor/skills/cursor-local"
 printf '# Claude local\n' > "$HOME/.claude/skills/claude-local/SKILL.md"
 printf '# Cursor local\n' > "$HOME/.cursor/skills/cursor-local/SKILL.md"
@@ -125,5 +127,48 @@ ln -s "$TMP/foreign" "$COPY_HOME/.claude/skills/imported/extra"
 HOME="$COPY_HOME" hub --store "$STORE" apply --copy
 test ! -e "$COPY_HOME/.claude/skills/imported/extra"
 test "$(cat "$TMP/foreign/keep.txt")" = 'keep external'
+
+echo "== Sync shares Machine records through a bare origin =="
+ORIGIN="$TMP/origin.git"
+git init -q --bare -b main "$ORIGIN"
+git -C "$STORE" remote add origin "$ORIGIN"
+git -C "$STORE" push -q -u origin main
+hub sync
+
+echo "== A second Machine clones the Store and joins the Fleet =="
+SECOND_HOME="$TMP/second-home"
+mkdir -p "$SECOND_HOME/.config/agent-hub" "$SECOND_HOME/.claude" "$SECOND_HOME/.cursor"
+printf 'second-machine\n' > "$SECOND_HOME/.config/agent-hub/machine"
+HOME="$SECOND_HOME" hub init --from "$ORIGIN" --yes
+HOME="$SECOND_HOME" hub sync
+hub sync
+hub status --fleet --json > "$TMP/fleet.json"
+python3 - "$TMP/fleet.json" <<'PYFLEET'
+import json, sys
+rows = json.load(open(sys.argv[1]))["fleet"]
+assert {row["machine"] for row in rows} == {"first-machine", "second-machine"}, rows
+assert all(row["current"] for row in rows), rows
+PYFLEET
+
+echo "== Fleet lag counts content changes, then clears after Sync =="
+printf 'Changed on first Machine\n' > "$STORE/AGENTS.md"
+hub sync
+hub status --fleet --json > "$TMP/fleet.json"
+python3 - "$TMP/fleet.json" <<'PYFLEET'
+import json, sys
+rows = {row["machine"]: row for row in json.load(open(sys.argv[1]))["fleet"]}
+assert rows["first-machine"]["current"] is True, rows
+assert rows["first-machine"]["local"] is True, rows
+assert rows["second-machine"]["behind"] == 1, rows
+assert rows["second-machine"]["current"] is False, rows
+PYFLEET
+HOME="$SECOND_HOME" hub sync
+hub sync
+hub status --fleet --json > "$TMP/fleet.json"
+python3 - "$TMP/fleet.json" <<'PYFLEET'
+import json, sys
+assert all(row["current"] for row in json.load(open(sys.argv[1]))["fleet"])
+PYFLEET
+grep -Fq 'Changed on first Machine' "$SECOND_HOME/.claude/CLAUDE.md"
 
 echo "SMOKE TEST PASSED"

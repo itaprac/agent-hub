@@ -58,6 +58,3 @@ jobs:
 
       - name: Test Web API
         run: ./tests/web_smoke.sh
-
-      - name: Test federation
-        run: ./tests/smoke-peers.sh

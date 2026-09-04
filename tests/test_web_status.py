@@ -103,7 +103,7 @@ def test_status_contention_returns_423_without_waiting(
             urllib.request.urlopen(f"{server}/api/status", timeout=2)
         assert error.value.code == 423
         assert json.loads(error.value.read().decode("utf-8")) == {
-            "error": "repository is busy; try again after the current operation finishes"
+            "error": "store is busy; try again after the current operation finishes"
         }
     finally:
         release.set()
