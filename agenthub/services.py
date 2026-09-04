@@ -28,22 +28,33 @@ class ServiceReport(core.Report):
 
     @property
     def command(self) -> str:
-        return f"timer {self.action}" if self.service == "timer" else f"ui --service {self.action}"
+        return (
+            f"timer {self.action}"
+            if self.service == "timer"
+            else f"ui --service {self.action}"
+        )
 
 
 def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
     """Process seam for tests. Service commands never run through a shell."""
-    return subprocess.run(command, text=True, capture_output=True, check=False, timeout=30)
+    return subprocess.run(
+        command, text=True, capture_output=True, check=False, timeout=30
+    )
 
 
 def probe_ui(store: Path) -> bool:
     try:
-        with urllib.request.urlopen("http://127.0.0.1:7337/api/state", timeout=0.25) as response:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:7337/api/state", timeout=0.25
+        ) as response:
             if response.status != 200:
                 return False
             state = json.load(response)
-            return (isinstance(state, dict) and isinstance(state.get("repo"), str)
-                    and Path(state["repo"]).resolve() == store.resolve())
+            return (
+                isinstance(state, dict)
+                and isinstance(state.get("repo"), str)
+                and Path(state["repo"]).resolve() == store.resolve()
+            )
     except (OSError, ValueError, urllib.error.URLError):
         return False
 
@@ -51,7 +62,11 @@ def probe_ui(store: Path) -> bool:
 def _require(command: list[str]) -> str:
     result = run_command(command)
     if result.returncode:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"{command[0]} exited {result.returncode}")
+        raise RuntimeError(
+            result.stderr.strip()
+            or result.stdout.strip()
+            or f"{command[0]} exited {result.returncode}"
+        )
     return result.stdout.strip()
 
 
@@ -72,7 +87,9 @@ def _safe_path(home: Path, path: Path) -> None:
 def _executable(name: str) -> Path:
     found = shutil.which(name)
     if not found:
-        raise ValueError(f"{name} is not on PATH; install agent-hub before enabling a service")
+        raise ValueError(
+            f"{name} is not on PATH; install agent-hub before enabling a service"
+        )
     return Path(found).resolve()
 
 
@@ -84,7 +101,11 @@ def _environment(home: Path, store: Path, executable: Path) -> dict[str, str]:
     paths.extend(part for part in os.environ.get("PATH", "").split(os.pathsep) if part)
     for fallback in ("/usr/local/bin", "/usr/bin", "/bin"):
         paths.append(fallback)
-    return {"HOME": str(home), "AGENT_HUB_STORE": str(store), "PATH": os.pathsep.join(dict.fromkeys(paths))}
+    return {
+        "HOME": str(home),
+        "AGENT_HUB_STORE": str(store),
+        "PATH": os.pathsep.join(dict.fromkeys(paths)),
+    }
 
 
 def _write(path: Path, content: bytes) -> bool:
@@ -100,9 +121,21 @@ def _launch_state(target: str) -> tuple[bool, str]:
     if result.returncode == 0:
         return True, result.stdout
     message = (result.stderr + result.stdout).lower()
-    if any(text in message for text in ("could not find service", "could not find specified service", "no such process", "service not found")):
+    if any(
+        text in message
+        for text in (
+            "could not find service",
+            "could not find specified service",
+            "no such process",
+            "service not found",
+        )
+    ):
         return False, ""
-    raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "could not inspect launchd service")
+    raise RuntimeError(
+        result.stderr.strip()
+        or result.stdout.strip()
+        or "could not inspect launchd service"
+    )
 
 
 def _fresh_log(path: Path, offset: int) -> str:
@@ -167,7 +200,9 @@ def _last_recorded_sync(store: Path) -> str:
         return "unknown"
 
 
-def _launchd(action: str, store: Path, home: Path, service: str) -> list[core.StatusCheck]:
+def _launchd(
+    action: str, store: Path, home: Path, service: str
+) -> list[core.StatusCheck]:
     name = "sync" if service == "timer" else "web"
     label = f"com.agenthub.{name}"
     domain = f"gui/{os.getuid()}"
@@ -178,16 +213,37 @@ def _launchd(action: str, store: Path, home: Path, service: str) -> list[core.St
     checks: list[core.StatusCheck] = []
 
     def note(level: str, text: str) -> None:
-        checks.append(core.StatusCheck(kind="service", level=level, text=text, target=str(plist)))
+        checks.append(
+            core.StatusCheck(kind="service", level=level, text=text, target=str(plist))
+        )
 
     if action == "status":
-        fields = [line.strip() for line in state.splitlines() if any(key in line for key in (
-            "state =", "last exit code =", "last terminating signal =", "runs =", "pid =", "last spawn time ="
-        ))]
-        note("ok" if loaded else "skip", f"{label}: {'loaded' if loaded else 'off'}" + ("; " + "; ".join(fields) if fields else ""))
+        fields = [
+            line.strip()
+            for line in state.splitlines()
+            if any(
+                key in line
+                for key in (
+                    "state =",
+                    "last exit code =",
+                    "last terminating signal =",
+                    "runs =",
+                    "pid =",
+                    "last spawn time =",
+                )
+            )
+        ]
+        note(
+            "ok" if loaded else "skip",
+            f"{label}: {'loaded' if loaded else 'off'}"
+            + ("; " + "; ".join(fields) if fields else ""),
+        )
         if service == "timer":
             note("ok", f"last recorded sync: {_last_recorded_sync(store)}")
-        note("ok", f"logs: {home / 'Library/Logs' / ('agent-hub-' + name + '.log')} and {home / 'Library/Logs' / ('agent-hub-' + name + '.error.log')}")
+        note(
+            "ok",
+            f"logs: {home / 'Library/Logs' / ('agent-hub-' + name + '.log')} and {home / 'Library/Logs' / ('agent-hub-' + name + '.error.log')}",
+        )
         return checks
     if action == "off":
         if loaded:
@@ -198,15 +254,22 @@ def _launchd(action: str, store: Path, home: Path, service: str) -> list[core.St
     if not store.is_dir():
         raise ValueError(f"Store directory not found: {store}")
     executable = _executable("agent-hub" if service == "timer" else "agent-hub-web")
-    arguments = [str(executable), "sync", "--quiet"] if service == "timer" else [str(executable), "--host", "127.0.0.1", "--port", "7337", "--quiet"]
+    arguments = (
+        [str(executable), "sync", "--quiet"]
+        if service == "timer"
+        else [str(executable), "--host", "127.0.0.1", "--port", "7337", "--quiet"]
+    )
     stdout = home / "Library/Logs" / f"agent-hub-{name}.log"
     stderr = home / "Library/Logs" / f"agent-hub-{name}.error.log"
     for path in (stdout, stderr):
         _safe_path(home, path)
     document = {
-        "Label": label, "ProgramArguments": arguments, "WorkingDirectory": str(store),
+        "Label": label,
+        "ProgramArguments": arguments,
+        "WorkingDirectory": str(store),
         "EnvironmentVariables": _environment(home, store, executable),
-        "StandardOutPath": str(stdout), "StandardErrorPath": str(stderr),
+        "StandardOutPath": str(stdout),
+        "StandardErrorPath": str(stderr),
         "RunAtLoad": service == "ui",
     }
     if service == "timer":
@@ -226,38 +289,74 @@ def _launchd(action: str, store: Path, home: Path, service: str) -> list[core.St
             _require(["launchctl", "bootstrap", domain, str(plist)])
         except RuntimeError as exc:
             if service == "ui":
-                raise RuntimeError(f"{exc}; {_ui_start_error(stderr, offset, executable, domain)}") from exc
+                raise RuntimeError(
+                    f"{exc}; {_ui_start_error(stderr, offset, executable, domain)}"
+                ) from exc
             raise
     if service == "ui" and not _wait_ui(store):
         raise RuntimeError(_ui_start_error(stderr, offset, executable, domain))
     if service == "ui":
         active, current_state = _launch_state(target)
         if not active or not re.search(r"(?m)^\s*pid\s*=\s*\d+", current_state):
-            raise RuntimeError(f"{label} is not running; {_ui_start_error(stderr, offset, executable, domain)}")
-    note("ok", f"{label}: on" + ("; sync every 600 seconds" if service == "timer" else "; Console listens on 127.0.0.1:7337"))
+            raise RuntimeError(
+                f"{label} is not running; {_ui_start_error(stderr, offset, executable, domain)}"
+            )
+    note(
+        "ok",
+        f"{label}: on"
+        + (
+            "; sync every 600 seconds"
+            if service == "timer"
+            else "; Console listens on 127.0.0.1:7337"
+        ),
+    )
     return checks
 
 
-def _quote_unit(value: str, *, command: bool = False) -> str:
+def _quote_unit(value: str) -> str:
     if "\x00" in value:
         raise ValueError("service values must not contain NUL")
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t").replace("%", "%%")
-    if command:
-        escaped = escaped.replace("$", "$$")
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+        .replace("%", "%%")
+    )
     return '"' + escaped + '"'
 
 
 def _unit_files(store: Path, home: Path, service: str) -> dict[str, bytes]:
     name = "sync" if service == "timer" else "web"
     executable = _executable("agent-hub" if service == "timer" else "agent-hub-web")
-    arguments = [str(executable), "sync", "--quiet"] if service == "timer" else [str(executable), "--host", "127.0.0.1", "--port", "7337", "--quiet"]
-    lines = ["[Unit]", f"Description=agent-hub {name}", "", "[Service]",
-             "Type=oneshot" if service == "timer" else "Type=exec",
-             "WorkingDirectory=" + _quote_unit(str(store)),
-             "ExecStart=" + " ".join(_quote_unit(value, command=True) for value in arguments)]
-    lines.extend("Environment=" + _quote_unit(f"{key}={value}") for key, value in _environment(home, store, executable).items())
+    arguments = (
+        [str(executable), "sync", "--quiet"]
+        if service == "timer"
+        else [str(executable), "--host", "127.0.0.1", "--port", "7337", "--quiet"]
+    )
+    lines = [
+        "[Unit]",
+        f"Description=agent-hub {name}",
+        "",
+        "[Service]",
+        "Type=oneshot" if service == "timer" else "Type=exec",
+        "ExecStart=:" + " ".join(_quote_unit(value) for value in arguments),
+    ]
+    lines.extend(
+        "Environment=" + _quote_unit(f"{key}={value}")
+        for key, value in _environment(home, store, executable).items()
+    )
     if service == "ui":
-        lines.extend(("Restart=on-failure", "RestartSec=5", "", "[Install]", "WantedBy=default.target"))
+        lines.extend(
+            (
+                "Restart=on-failure",
+                "RestartSec=5",
+                "",
+                "[Install]",
+                "WantedBy=default.target",
+            )
+        )
     units = {f"agent-hub-{name}.service": ("\n".join(lines) + "\n").encode()}
     if service == "timer":
         units["agent-hub-sync.timer"] = (
@@ -269,17 +368,32 @@ def _unit_files(store: Path, home: Path, service: str) -> dict[str, bytes]:
 
 
 def _systemd_state(unit: str) -> dict[str, str]:
-    result = run_command(["systemctl", "--user", "show", unit,
-        "--property=LoadState,ActiveState,UnitFileState,Result,ExecMainStatus,ExecMainExitTimestamp,LastTriggerUSec,NextElapseUSecRealtime"])
-    state = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    result = run_command(
+        [
+            "systemctl",
+            "--user",
+            "show",
+            unit,
+            "--property=LoadState,ActiveState,UnitFileState,Result,ExecMainStatus,ExecMainExitTimestamp,LastTriggerUSec,NextElapseUSecRealtime",
+        ]
+    )
+    state = dict(
+        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+    )
     if result.returncode and state.get("LoadState") != "not-found":
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "could not inspect systemd unit")
+        raise RuntimeError(
+            result.stderr.strip()
+            or result.stdout.strip()
+            or "could not inspect systemd unit"
+        )
     if not state:
         raise RuntimeError("systemctl returned no unit state")
     return state
 
 
-def _systemd(action: str, store: Path, home: Path, service: str) -> list[core.StatusCheck]:
+def _systemd(
+    action: str, store: Path, home: Path, service: str
+) -> list[core.StatusCheck]:
     directory = home / ".config/systemd/user"
     unit = "agent-hub-sync.timer" if service == "timer" else "agent-hub-web.service"
     names = ["agent-hub-sync.service", unit] if service == "timer" else [unit]
@@ -289,14 +403,28 @@ def _systemd(action: str, store: Path, home: Path, service: str) -> list[core.St
     checks: list[core.StatusCheck] = []
 
     def note(level: str, text: str) -> None:
-        checks.append(core.StatusCheck(kind="service", level=level, text=text, target=str(directory / unit)))
+        checks.append(
+            core.StatusCheck(
+                kind="service", level=level, text=text, target=str(directory / unit)
+            )
+        )
 
     if action == "status":
-        note("ok" if state.get("ActiveState") == "active" else "skip", f"{unit}: " + "; ".join(f"{key}={value}" for key, value in state.items()))
+        note(
+            "ok" if state.get("ActiveState") == "active" else "skip",
+            f"{unit}: " + "; ".join(f"{key}={value}" for key, value in state.items()),
+        )
         if service == "timer" and state.get("LoadState") != "not-found":
             last = _systemd_state("agent-hub-sync.service")
-            note("ok", "last sync: " + "; ".join(f"{key}={value}" for key, value in last.items()))
-        note("ok", f"logs: journalctl --user -u agent-hub-{'sync' if service == 'timer' else 'web'}.service -n 40")
+            note(
+                "ok",
+                "last sync: "
+                + "; ".join(f"{key}={value}" for key, value in last.items()),
+            )
+        note(
+            "ok",
+            f"logs: journalctl --user -u agent-hub-{'sync' if service == 'timer' else 'web'}.service -n 40",
+        )
         return checks
     if action == "off":
         if state.get("LoadState") != "not-found":
@@ -330,10 +458,22 @@ def _systemd(action: str, store: Path, home: Path, service: str) -> list[core.St
         if changed and active:
             _require(["systemctl", "--user", "restart", unit])
     if service == "ui" and not _wait_ui(store):
-        raise RuntimeError("Console service did not return HTTP 200; inspect journalctl --user -u agent-hub-web.service -n 40")
+        raise RuntimeError(
+            "Console service did not return HTTP 200; inspect journalctl --user -u agent-hub-web.service -n 40"
+        )
     if service == "ui" and _systemd_state(unit).get("ActiveState") != "active":
-        raise RuntimeError(f"{unit} is not running; inspect journalctl --user -u {unit} -n 40")
-    note("ok", f"{unit}: on" + ("; sync every 600 seconds" if service == "timer" else "; Console listens on 127.0.0.1:7337"))
+        raise RuntimeError(
+            f"{unit} is not running; inspect journalctl --user -u {unit} -n 40"
+        )
+    note(
+        "ok",
+        f"{unit}: on"
+        + (
+            "; sync every 600 seconds"
+            if service == "timer"
+            else "; Console listens on 127.0.0.1:7337"
+        ),
+    )
     return checks
 
 
@@ -353,10 +493,27 @@ def _service(action: str, store: Path, service: str) -> ServiceReport:
             checks = _systemd(action, store, home, service)
         else:
             raise ValueError(f"user services are not supported on {system}")
-    except (config.ConfigError, ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
-        checks.append(core.StatusCheck(kind="service", level="ERROR", text=core.one_line(str(exc))))
-    return ServiceReport(machine_id=machine, hostname=hostname, repo=str(store), checks=tuple(checks),
-                         exit_code=int(any(check.level == "ERROR" for check in checks)), action=action, service=service)
+    except (
+        config.ConfigError,
+        ValueError,
+        OSError,
+        RuntimeError,
+        subprocess.SubprocessError,
+    ) as exc:
+        checks.append(
+            core.StatusCheck(
+                kind="service", level="ERROR", text=core.one_line(str(exc))
+            )
+        )
+    return ServiceReport(
+        machine_id=machine,
+        hostname=hostname,
+        repo=str(store),
+        checks=tuple(checks),
+        exit_code=int(any(check.level == "ERROR" for check in checks)),
+        action=action,
+        service=service,
+    )
 
 
 def timer(action: str, store: Path) -> ServiceReport:
