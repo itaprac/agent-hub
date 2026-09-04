@@ -18,10 +18,11 @@ from . import config as hub_config
 from . import files as content_files
 from . import gitio
 from . import operations
+from . import skills as installed_skills
 from . import usage
 
 MAX_BODY_BYTES = content_files.MAX_FILE_BYTES + 64 * 1024
-RUN_COMMANDS = frozenset({"apply", "sync"})
+RUN_COMMANDS = frozenset({"apply", "sync", "install", "update"})
 
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -58,11 +59,18 @@ def run_command(
     command: str,
     dry_run: bool,
     prefer: str | None = None,
+    source: str | None = None,
+    skill: str | None = None,
+    names: list[str] | None = None,
 ) -> dict[str, Any]:
     if command == "apply":
         return content_operations.apply(dry_run=dry_run).to_dict()
     if command == "sync":
         return content_operations.sync(dry_run=dry_run, prefer=prefer).to_dict()
+    if command == "install" and source is not None:
+        return content_operations.install(source, skill).to_dict()
+    if command == "update":
+        return content_operations.update(names).to_dict()
     raise ApiError(400, f"unknown command: {command}")
 
 
@@ -338,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
         )
         self.send_json(file, headers={"ETag": f'"{file["revision"]}"'})
 
-    def _command_payload(self) -> tuple[str, bool, str | None]:
+    def _command_payload(self) -> dict[str, Any]:
         payload = self.read_json()
         command = payload.get("command")
         if not isinstance(command, str) or command not in RUN_COMMANDS:
@@ -355,13 +363,25 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(
                 400, "prefer is valid only for sync and must be local or remote"
             )
-        return command, dry_run, prefer
+        if dry_run and command not in {"apply", "sync"}:
+            raise ApiError(400, "dry_run is supported only by apply and sync")
+        options: dict[str, Any] = {"command": command, "dry_run": dry_run, "prefer": prefer}
+        try:
+            if command == "install":
+                options["source"] = installed_skills.source_value(payload.get("source"))
+                if "skill" in payload and payload["skill"] is not None:
+                    options["skill"] = installed_skills.skill_names([payload["skill"]])[0]
+            if command == "update":
+                options["names"] = installed_skills.skill_names(payload.get("names", []))
+        except ValueError as exc:
+            raise ApiError(400, str(exc)) from exc
+        return options
 
     def post_run(self, _match: re.Match[str]) -> None:
-        command, dry_run, prefer = self._command_payload()
+        options = self._command_payload()
         self.send_json(
             run_command(
-                operations.ContentOperations(self.repo), command, dry_run, prefer
+                operations.ContentOperations(self.repo), **options
             )
         )
 

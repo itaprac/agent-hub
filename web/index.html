@@ -98,7 +98,7 @@
       </button>
       <div class="theme-menu" id="theme-menu" role="menu" aria-label="Colour scheme" hidden></div>
     </div>
-    <button class="btn go" id="btn-refresh" title="Refresh state, status and machines (R)" aria-keyshortcuts="r">
+    <button class="btn go" id="btn-refresh" title="Refresh Store, status and Fleet (R)" aria-keyshortcuts="r">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.4 8a5.4 5.4 0 1 1-1.6-3.8"/><path d="M13.6 2v3h-3"/></svg>
       Refresh
     </button>
@@ -112,21 +112,16 @@
         <h1 class="sr-only">Status</h1>
         <div class="statusbar" id="summary" role="status"></div>
 
-        <section class="sec peers" id="peers">
+        <section class="sec fleet" id="fleet">
           <div class="sec-head">
-            <h2 class="sec-title">Machines</h2>
-            <span class="pill pill-idle" id="peers-verdict" title="federation sync state">
-              <span class="dot"></span><span id="peers-verdict-text">Unknown</span>
+            <h2 class="sec-title">Fleet</h2>
+            <span class="pill pill-idle" id="fleet-verdict" title="Recorded Store revisions">
+              <span class="dot"></span><span id="fleet-verdict-text">Unknown</span>
             </span>
             <span class="spacer"></span>
-            <span class="sec-note" id="peers-meta" role="status" aria-live="polite" aria-atomic="true"></span>
-            <label class="switch" title="pass --dry-run to the Apply and Sync buttons on the cards">
-              <input type="checkbox" id="dry-run">
-              <span class="sw" aria-hidden="true"></span>
-              <span>dry-run</span>
-            </label>
+            <span class="sec-note" id="fleet-meta" role="status" aria-live="polite" aria-atomic="true"></span>
           </div>
-          <div class="mgrid" id="peers-grid"></div>
+          <div class="mgrid" id="fleet-grid"></div>
         </section>
 
         <section class="sec">

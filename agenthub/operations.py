@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
 
-from . import config, core, files, gitio
+from . import config, core, files, gitio, skills as installed_skills
 from . import fleet as fleet_records
 
 
@@ -114,6 +114,14 @@ class ContentOperations:
             report_os_errors=True,
         )
 
+    def install(self, source: str, skill: str | None = None) -> installed_skills.InstallReport:
+        with _serialized():
+            return installed_skills.install(self.repo, source, skill)
+
+    def update(self, names: list[str] | None = None) -> installed_skills.InstallReport:
+        with _serialized():
+            return installed_skills.update(self.repo, names)
+
     def add_skill(self, name: str, project: str | None = None) -> core.AddSkillReport:
         return self._report(
             core.AddSkillReport,
@@ -204,7 +212,10 @@ def _relative(path: Path, repo: Path) -> str:
         return str(path)
 
 
-def _skills(parent: Path, repo: Path) -> list[dict[str, Any]]:
+def _skills(
+    parent: Path, repo: Path,
+    provenance: dict[str, dict[str, str | None]] | None = None,
+) -> list[dict[str, Any]]:
     skills = []
     for child in config.skill_directories(parent):
         child_files = []
@@ -226,6 +237,8 @@ def _skills(parent: Path, repo: Path) -> list[dict[str, Any]]:
                 "name": child.name,
                 "path": _relative(child, repo),
                 "files": child_files,
+                "installed": child.name in (provenance or {}),
+                "provenance": (provenance or {}).get(child.name),
             }
         )
     return skills
@@ -233,14 +246,33 @@ def _skills(parent: Path, repo: Path) -> list[dict[str, Any]]:
 
 def _state(projection: config.MachineProjection) -> dict[str, Any]:
     repo = projection.repo
+    settings = config.load_settings(repo)
+    enabled = {agent.name for agent in projection.agents}
     agents = [
         {
-            "name": agent.name,
-            "mode": agent.mode,
-            "keys": dict(agent.target_templates),
+            "name": agent.id,
+            "display_name": agent.name,
+            "detected": agent.detected,
+            "enabled": agent.id in enabled,
+            "universal": agent.universal,
+            "mode": settings["mode"],
+            "keys": {
+                key: str(value)
+                for key, value in (
+                    ("skills_global", agent.skills_global),
+                    ("skills_project", agent.skills_project),
+                    ("instructions_global", agent.instructions_global),
+                ) if value is not None
+            },
         }
-        for agent in projection.agents
+        for agent in sorted(settings["agents"].values(), key=lambda item: item.id)
     ]
+    warnings = []
+    try:
+        provenance = installed_skills.read_provenance(repo)
+    except ValueError as exc:
+        provenance = {}
+        warnings.append(str(exc))
     projects: list[dict[str, Any]] = [
         {
             "name": project.name,
@@ -263,10 +295,13 @@ def _state(projection: config.MachineProjection) -> dict[str, Any]:
         "machine_id": projection.machine_id,
         "hostname": projection.hostname,
         "repo": str(repo),
+        "store": str(repo),
+        "hub_config_exists": (repo / "hub.toml").is_file(),
+        "warnings": warnings,
         "agents": agents,
         "projects": projects,
         "skills": {
-            "global": _skills(repo / "skills", repo),
+            "global": _skills(repo / "skills", repo, provenance),
             "projects": {
                 project.name: _skills(repo / "projects" / project.name / "skills", repo)
                 for project in projection.projects

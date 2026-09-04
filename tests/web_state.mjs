@@ -5,9 +5,22 @@ import assert from "node:assert/strict";
 import { api } from "../web/js/api.js";
 import { adoptProjectField, projectField } from "../web/js/modals.js";
 
-import { createPeersController } from "../web/js/peers.js";
+import { createFleetController, machineState, recordAge } from "../web/js/fleet.js";
 import { createSettingsController } from "../web/js/settings.js";
 import { createUsageController } from "../web/js/usage.js";
+import { buildInstructionsTree, buildConfigTree, skillProvenance } from "../web/js/workspace.js";
+
+assert.deepEqual(buildInstructionsTree({ instructions: { global: [
+  { name: "AGENTS.md", path: "AGENTS.md", exists: true },
+  { name: "codex.md", path: "agents/codex.md", exists: true },
+] } }).map((group) => group.files.map((file) => file.path)), [["AGENTS.md"], ["agents/codex.md"]]);
+assert.deepEqual(buildConfigTree({ config_files: [
+  { path: "hub.toml", name: "hub.toml", exists: false }, { path: "config/peers.toml" },
+] })[0].files.map((file) => file.path), ["hub.toml"]);
+assert.equal(skillProvenance({ installed: false }), null);
+assert.equal(skillProvenance({ installed: true, provenance: { source_url: "javascript:alert(1)" } }).url, null);
+assert.equal(skillProvenance({ installed: true, provenance: { source_url: "https://example.com/skill", source: "<script>" } }).source, "<script>");
+assert.equal(skillProvenance({ installed: true, provenance: { source_url: "https://example.com/skill" } }).url, "https://example.com/skill");
 
 console.log("== 1. Usage ignores stale requests after the selected window changes ==");
 const usageRequests = [];
@@ -91,25 +104,23 @@ assert.throws(() => {
 assert.equal(settingsController.view().tokenDraft, "");
 console.log("PASS");
 
-console.log("== 3. Peers keeps dry-run stable and pauses automatic refresh during a command ==");
-const peerRequests = [];
-const peerRuns = [];
-const peerViews = [];
+console.log("== 3. Fleet keeps dry-run stable and pauses automatic refresh during a command ==");
+const fleetRequests = [];
+const fleetRuns = [];
+const fleetViews = [];
 let timerTick = null;
 let finishCommand;
-const peersController = createPeersController({
+const fleetController = createFleetController({
   request() {
-    peerRequests.push(true);
+    fleetRequests.push(true);
     return Promise.resolve({ machines: [] });
   },
   publish() {},
   render(view) {
-    peerViews.push(view);
+    fleetViews.push(view);
   },
-  remember() {},
   now: () => "12:00",
   isBusy: () => false,
-  isSupported: () => true,
   schedule(callback, delay) {
     assert.equal(delay, 60_000);
     timerTick = callback;
@@ -117,43 +128,43 @@ const peersController = createPeersController({
   },
   cancel() {},
 });
-peersController.setRunner((machine, command, dryRun) => {
-  peerRuns.push({ machine, command, dryRun });
+fleetController.setRunner((command, dryRun) => {
+  fleetRuns.push({ command, dryRun });
   return new Promise((resolve) => {
     finishCommand = resolve;
   });
 });
-peersController.startAutoRefresh();
-peersController.setDryRun(true);
-const command = peersController.run("mini", "apply");
-assert.deepEqual(peerRuns, [{ machine: "mini", command: "apply", dryRun: true }]);
-peersController.setDryRun(false);
-assert.equal(peersController.view().dryRun, true);
-assert.deepEqual(peersController.view().running, { machine: "mini", command: "apply", dryRun: true });
-const runningView = peersController.view();
+fleetController.startAutoRefresh();
+fleetController.setDryRun(true);
+const command = fleetController.run("apply");
+assert.deepEqual(fleetRuns, [{ command: "apply", dryRun: true }]);
+fleetController.setDryRun(false);
+assert.equal(fleetController.view().dryRun, true);
+assert.deepEqual(fleetController.view().running, { command: "apply", dryRun: true });
+const runningView = fleetController.view();
 assert.throws(() => {
   runningView.running.dryRun = false;
 }, TypeError);
-assert.equal(peersController.view().running.dryRun, true);
+assert.equal(fleetController.view().running.dryRun, true);
 await timerTick();
-assert.equal(peerRequests.length, 0);
+assert.equal(fleetRequests.length, 0);
 
 finishCommand();
 await command;
-assert.equal(peerRequests.length, 1);
+assert.equal(fleetRequests.length, 1);
 await timerTick();
-assert.equal(peerRequests.length, 2);
-assert.deepEqual(peersController.view({ loading: true }), {
+assert.equal(fleetRequests.length, 2);
+assert.deepEqual(fleetController.view({ loading: true }), {
   dryRun: true,
   running: null,
   controlsDisabled: true,
 });
-assert.deepEqual(peersController.view(), {
+assert.deepEqual(fleetController.view(), {
   dryRun: true,
   running: null,
   controlsDisabled: false,
 });
-assert.equal(peerViews.some((view) => view.running?.machine === "mini"), true);
+assert.equal(fleetViews.some((view) => view.running?.command === "apply"), true);
 console.log("PASS");
 
 console.log("== 4. Skill forms send checkout paths and boolean adoption scope ==");
@@ -182,5 +193,61 @@ assert.deepEqual(payloads, [
   { url: "/api/adopt", payload: { path: "/tmp/local", project: false, name: null } },
   { url: "/api/adopt", payload: { path: "/tmp/project/local", project: true, name: "renamed" } },
 ]);
+console.log("PASS");
+console.log("== 5. Fleet coalesces refreshes and accepts only local commands ==");
+let resolveFleet;
+let fetches = 0;
+const snapshots = [];
+const isolatedFleet = createFleetController({
+  request: () => { fetches++; return new Promise((resolve) => { resolveFleet = resolve; }); },
+  publish: (patch) => snapshots.push(patch),
+});
+const firstFleet = isolatedFleet.refresh();
+const secondFleet = isolatedFleet.refresh();
+assert.equal(firstFleet, secondFleet);
+await Promise.resolve();
+assert.equal(fetches, 1);
+resolveFleet({ machine_id: "mini", machines: [] });
+await firstFleet;
+assert.equal(snapshots.at(-1).fleetLoading, false);
+assert.equal(await isolatedFleet.run("remote-sync"), false);
+assert.deepEqual(machineState({ current: true, problems: 0 }), { tone: "ok", word: "current", rest: "0 problems" });
+assert.equal(machineState({ behind: 3, problems: 2 }).word, "behind 3");
+assert.equal(machineState({ error: "invalid record" }).tone, "bad");
+assert.equal(recordAge(null), "not recorded");
+assert.equal(recordAge(7200), "2h ago");
+console.log("PASS");
+
+console.log("== 6. Store requests are serialized and a failed request releases the queue ==");
+const requests = [];
+globalThis.fetch = (url, options) => new Promise((resolve) => requests.push({ url, options, resolve }));
+try {
+  const stateRequest = api.state();
+  const statusRequest = api.status();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests.map((item) => item.url), ["/api/state"]);
+  requests[0].resolve({ ok: false, status: 500, headers: { get: () => "application/json" }, json: async () => ({ error: "state failed" }) });
+  await assert.rejects(stateRequest, /state failed/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests.map((item) => item.url), ["/api/state", "/api/status"]);
+  requests[1].resolve({ ok: true, headers: { get: () => "application/json" }, json: async () => ({ exit_code: 0 }) });
+  await statusRequest;
+} finally { globalThis.fetch = originalFetch; }
+console.log("PASS");
+
+console.log("== 7. Install and Update use local command payloads ==");
+const installPayloads = [];
+globalThis.fetch = async (url, options) => {
+  installPayloads.push({ url, payload: JSON.parse(options.body) });
+  return { ok: true, headers: { get: () => "application/json" }, json: async () => ({ exit_code: 0 }) };
+};
+try { await api.install("owner/repo", "review"); await api.update(); await api.run("apply", true); }
+finally { globalThis.fetch = originalFetch; }
+assert.deepEqual(installPayloads, [
+  { url: "/api/run", payload: { command: "install", source: "owner/repo", skill: "review" } },
+  { url: "/api/run", payload: { command: "update" } },
+  { url: "/api/run", payload: { command: "apply", dry_run: true } },
+]);
+assert.equal(api.peerRun, undefined);
 console.log("PASS");
 console.log("WEB STATE TEST PASSED");
