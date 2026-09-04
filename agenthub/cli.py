@@ -93,8 +93,10 @@ def main(argv: list[str] | None = None) -> int:
             report = store.sync(dry_run=args.dry_run)
         elif args.command == "add-skill":
             report = store.add_skill(args.name, args.project)
-        else:
+        elif args.command == "adopt":
             report = store.adopt(args.path, args.project, args.name)
+        else:
+            parser.error(f"unsupported command: {args.command}")
         if args.json:
             print(json.dumps(report.to_dict()))
             return report.exit_code
