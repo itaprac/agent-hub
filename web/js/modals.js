@@ -228,10 +228,25 @@ export function projectField(projects, { name = "project", label = "Project", hi
     value: "",
     hint,
     options: [{ value: "", label: "— global —" }].concat(
-      projects.map((project) => ({
-        value: project.name,
-        label: project.available ? project.name : `${project.name} (not on this machine)`,
+      projects.filter((project) => project.available && project.path).map((project) => ({
+        value: project.path,
+        label: project.name,
       }))
     ),
+  };
+}
+
+
+export function adoptProjectField() {
+  return {
+    name: "project",
+    label: "Scope",
+    type: "select",
+    value: "",
+    hint: "Project scope uses the Git checkout that contains the directory path.",
+    options: [
+      { value: "", label: "Global" },
+      { value: "project", label: "Project containing this directory" },
+    ],
   };
 }

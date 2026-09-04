@@ -1,4 +1,4 @@
-"""Shared fixtures: an isolated home, a fixture content repository, and a web server."""
+"""Shared fixtures: an isolated HOME, a Store, and a web server."""
 
 from __future__ import annotations
 
@@ -17,14 +17,17 @@ if str(ROOT) not in sys.path:
 
 MACHINE_ID = "testmachine"
 
-AGENTS_TOML = """[claude]
-skills_global = "~/.claude/skills/{name}"
-skills_project = "{project_root}/.claude/skills/{name}"
-instructions_global = "~/.claude/CLAUDE.md"
-instructions_project = "{project_root}/CLAUDE.md"
+HUB_TOML = """[agents]
+enabled = ["claude"]
 mode = "symlink"
-"""
 
+[agents.claude]
+name = "Claude"
+universal = false
+skills_global = "~/.claude/skills"
+skills_project = ".claude/skills"
+instructions_global = "~/.claude/CLAUDE.md"
+"""
 
 def write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +52,18 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(directory))
     monkeypatch.delenv("AGENT_HUB_REPO", raising=False)
     monkeypatch.delenv("AGENT_HUB_MACHINE", raising=False)
+    for variable in (
+        "AGENT_HUB_STORE",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "XDG_CONFIG_HOME",
+        "AUTOHAND_HOME",
+        "GROK_HOME",
+        "HERMES_HOME",
+        "VIBE_HOME",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+    write(directory / ".config" / "agent-hub" / "machine", f"{MACHINE_ID}\n")
     return directory
 
 
@@ -61,22 +76,17 @@ def project(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def content(tmp_path: Path, home: Path, project: Path) -> Path:
-    """A fixture Content repository with one global and one project skill."""
+    """A Store with one global Skill and one private Project skill."""
     repo = tmp_path / "content"
-    hostname = platform.node()
+    write(repo / "hub.toml", HUB_TOML)
+    # Retained only for the setup and peer commands until their v2 migration.
     write(
         repo / "config" / "hub.toml",
-        f'[machines]\n"{hostname}" = "{MACHINE_ID}"\nunused-host = "other-machine"\n',
+        f'[machines]\n"{platform.node()}" = "{MACHINE_ID}"\nunused-host = "other-machine"\n',
     )
-    write(repo / "config" / "agents.toml", AGENTS_TOML)
-    write(
-        repo / "config" / "projects.toml",
-        f'[demo]\n{MACHINE_ID} = "{project}"\n\n[absent]\nother-machine = "~/absent"\n',
-    )
-    write(repo / "skills" / "global" / "alpha" / "SKILL.md", "# alpha\n")
-    write(repo / "skills" / "projects" / "demo" / "beta" / "SKILL.md", "# beta\n")
-    write(repo / "instructions" / "global" / "base.md", "Global base\n")
-    write(repo / "instructions" / "projects" / "demo" / "base.md", "Project base\n")
+    write(repo / "skills" / "alpha" / "SKILL.md", "# alpha\n")
+    write(repo / "projects" / "demo" / "skills" / "beta" / "SKILL.md", "# beta\n")
+    write(repo / "AGENTS.md", "Global base\n")
 
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.name", "agent-hub tests")

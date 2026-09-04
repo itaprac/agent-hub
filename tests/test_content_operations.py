@@ -23,7 +23,7 @@ def test_status_returns_the_structured_report(
 
     assert isinstance(report, core.StatusReport)
     assert report.command == "status"
-    assert report.problems == 4
+    assert report.problems == 2
 
 
 def test_machine_id_and_state_use_the_loaded_machine_projection(
@@ -63,7 +63,7 @@ def test_add_skill_returns_the_structured_report_and_creates_the_template(
 
     assert isinstance(report, core.AddSkillReport)
     assert report.exit_code == 0
-    assert (content / "skills" / "global" / "gamma" / "SKILL.md").is_file()
+    assert (content / "skills" / "gamma" / "SKILL.md").is_file()
 
 
 def test_adopt_returns_the_structured_report_and_leaves_a_link(
@@ -78,29 +78,29 @@ def test_adopt_returns_the_structured_report_and_leaves_a_link(
     assert isinstance(report, core.AdoptReport)
     assert report.exit_code == 0
     assert source.is_symlink()
-    assert source.resolve() == (content / "skills" / "global" / "local-skill").resolve()
+    assert source.resolve() == (content / "skills" / "local-skill").resolve()
 
 
 def test_file_operations_return_revision_checked_results(
     content_operations: operations.ContentOperations, content: Path
 ) -> None:
     created = content_operations.write_file(
-        "config/skills.toml", "[alpha]\n", None
+        "agents/claude.md", "[alpha]\n", None
     )
-    opened = content_operations.read_file("config/skills.toml")
+    opened = content_operations.read_file("agents/claude.md")
     deleted = content_operations.delete_file(
-        "config/skills.toml", opened["revision"]
+        "agents/claude.md", opened["revision"]
     )
 
     assert opened["revision"] == created["revision"]
-    assert deleted == {"path": "config/skills.toml", "deleted": True}
-    assert not (content / "config" / "skills.toml").exists()
+    assert deleted == {"path": "agents/claude.md", "deleted": True}
+    assert not (content / "agents" / "claude.md").exists()
 
 
 def test_invalid_configuration_is_a_structured_report_for_every_command(
     content_operations: operations.ContentOperations, content: Path, home: Path
 ) -> None:
-    (content / "config" / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
+    (content / "hub.toml").write_text("not = [toml\n", encoding="utf-8")
 
     reports = (
         content_operations.status(),
@@ -160,14 +160,14 @@ def test_file_mutation_fails_immediately_during_contention(
     )
     thread = threading.Thread(
         target=lambda: content_operations.write_file(
-            "config/skills.toml", "[alpha]\n", None
+            "agents/claude.md", "[alpha]\n", None
         )
     )
     thread.start()
     assert entered.wait(timeout=5)
     try:
         with pytest.raises(operations.RepositoryBusyError):
-            content_operations.write_file("config/skills.toml", "", None)
+            content_operations.write_file("agents/claude.md", "", None)
     finally:
         release.set()
         thread.join(timeout=5)
@@ -188,14 +188,14 @@ def test_consistent_file_read_participates_in_serialization(
     )
     thread = threading.Thread(
         target=lambda: content_operations.write_file(
-            "config/skills.toml", "[alpha]\n", None
+            "agents/claude.md", "[alpha]\n", None
         )
     )
     thread.start()
     assert entered.wait(timeout=5)
     try:
         with pytest.raises(operations.RepositoryBusyError):
-            content_operations.read_file("config/hub.toml")
+            content_operations.read_file("hub.toml")
     finally:
         release.set()
         thread.join(timeout=5)
@@ -216,7 +216,7 @@ def test_state_snapshot_participates_in_serialization(
     )
     thread = threading.Thread(
         target=lambda: content_operations.write_file(
-            "config/skills.toml", "[alpha]\n", None
+            "agents/claude.md", "[alpha]\n", None
         )
     )
     thread.start()
@@ -224,6 +224,33 @@ def test_state_snapshot_participates_in_serialization(
     try:
         with pytest.raises(operations.RepositoryBusyError):
             content_operations.state()
+    finally:
+        release.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("read", ["fleet", "git"])
+def test_fleet_and_git_reads_fail_immediately_while_store_is_busy(
+    content_operations: operations.ContentOperations, monkeypatch: pytest.MonkeyPatch, read: str
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    load = operations.config.load_machine_projection
+    monkeypatch.setattr(
+        operations.config,
+        "load_machine_projection",
+        lambda repo: hold_operation(lambda: load(repo), entered, release),
+    )
+    thread = threading.Thread(target=content_operations.status)
+    thread.start()
+    assert entered.wait(timeout=5)
+    try:
+        with pytest.raises(operations.RepositoryBusyError, match="store is busy"):
+            if read == "fleet":
+                content_operations.fleet()
+            else:
+                content_operations.git(fetch=False)
     finally:
         release.set()
         thread.join(timeout=5)

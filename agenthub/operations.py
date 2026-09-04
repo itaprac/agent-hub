@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
 
-from . import config, core, files
+from . import config, core, files, gitio, skills as installed_skills
+from . import fleet as fleet_records
 
 
 ReportT = TypeVar("ReportT", bound=core.Report)
@@ -23,7 +25,7 @@ class RepositoryBusyError(RuntimeError):
 def _serialized() -> Iterator[None]:
     if not _SERIALIZATION_LOCK.acquire(blocking=False):
         raise RepositoryBusyError(
-            "repository is busy; try again after the current operation finishes"
+            "store is busy; try again after the current operation finishes"
         )
     try:
         yield
@@ -37,8 +39,46 @@ class ContentOperations:
     def __init__(self, repo: Path) -> None:
         self.repo = repo
 
-    def status(self) -> core.StatusReport:
-        return self._report(core.StatusReport, core.status_report)
+    def init(
+        self,
+        *,
+        from_url: str | None = None,
+        remote: str | None = None,
+        yes: bool = False,
+    ) -> core.Report:
+        from .store import init_store
+
+        with _serialized():
+            return init_store(self.repo, from_url=from_url, remote=remote, yes=yes)
+
+    def migrate(self) -> core.Report:
+        from .migration import migrate
+
+        with _serialized():
+            return migrate(self.repo)
+
+    def project_link(self, path: Path) -> core.Report:
+        from .projects import link_project
+
+        with _serialized():
+            return link_project(self.repo, path)
+
+    def status(self, *, fleet: bool = False) -> core.StatusReport:
+        return self._report(
+            core.StatusReport, lambda projection: _status(projection, fleet)
+        )
+
+    def fleet(self) -> dict[str, Any]:
+        with _serialized():
+            machine_id, _ = config.resolve_machine()
+            return {
+                "machine_id": machine_id,
+                "machines": _fleet(self.repo, machine_id),
+            }
+
+    def git(self, *, fetch: bool = True) -> dict[str, Any]:
+        with _serialized():
+            return gitio.state(self.repo, fetch=fetch)
 
     def machine_id(self) -> str:
         with _serialized():
@@ -49,21 +89,38 @@ class ContentOperations:
             projection = config.load_machine_projection(self.repo)
             return _state(projection)
 
-    def apply(self, *, dry_run: bool = False) -> core.ApplyReport:
+    def apply(self, *, dry_run: bool = False, copy: bool = False) -> core.ApplyReport:
         return self._report(
             core.ApplyReport,
-            lambda projection: core.apply_report(projection, dry_run=dry_run),
+            lambda projection: core.apply_report(
+                config.load_machine_projection(self.repo, copy=True)
+                if copy
+                else projection,
+                dry_run=dry_run,
+            ),
             dry_run=dry_run,
             report_os_errors=True,
         )
 
-    def sync(self, *, dry_run: bool = False) -> core.SyncReport:
+    def sync(
+        self, *, dry_run: bool = False, prefer: str | None = None
+    ) -> core.SyncReport:
         return self._report(
             core.SyncReport,
-            lambda projection: core.sync_report(projection, dry_run=dry_run),
+            lambda projection: core.sync_report(
+                projection, dry_run=dry_run, prefer=prefer
+            ),
             dry_run=dry_run,
             report_os_errors=True,
         )
+
+    def install(self, source: str, skill: str | None = None) -> installed_skills.InstallReport:
+        with _serialized():
+            return installed_skills.install(self.repo, source, skill)
+
+    def update(self, names: list[str] | None = None) -> installed_skills.InstallReport:
+        with _serialized():
+            return installed_skills.update(self.repo, names)
 
     def add_skill(self, name: str, project: str | None = None) -> core.AddSkillReport:
         return self._report(
@@ -75,14 +132,12 @@ class ContentOperations:
     def adopt(
         self,
         path: str,
-        project: str | None = None,
+        project: bool | None = None,
         name: str | None = None,
     ) -> core.AdoptReport:
         return self._report(
             core.AdoptReport,
-            lambda projection: core.adopt_skill_report(
-                projection, path, project, name
-            ),
+            lambda projection: core.adopt_skill_report(projection, path, project, name),
             report_os_errors=True,
         )
 
@@ -157,7 +212,10 @@ def _relative(path: Path, repo: Path) -> str:
         return str(path)
 
 
-def _skills(parent: Path, repo: Path) -> list[dict[str, Any]]:
+def _skills(
+    parent: Path, repo: Path,
+    provenance: dict[str, dict[str, str | None]] | None = None,
+) -> list[dict[str, Any]]:
     skills = []
     for child in config.skill_directories(parent):
         child_files = []
@@ -179,46 +237,43 @@ def _skills(parent: Path, repo: Path) -> list[dict[str, Any]]:
                 "name": child.name,
                 "path": _relative(child, repo),
                 "files": child_files,
+                "installed": child.name in (provenance or {}),
+                "provenance": (provenance or {}).get(child.name),
             }
         )
     return skills
 
 
-def _instructions(
-    directory: Path, repo: Path, agents: list[str]
-) -> list[dict[str, Any]]:
-    names = ["base.md"] + [f"{agent}.md" for agent in agents]
-    if directory.is_dir():
-        for path in sorted(directory.glob("*.md"), key=lambda item: item.name.lower()):
-            if path.name not in names:
-                names.append(path.name)
-    entries = []
-    for name in names:
-        path = directory / name
-        stem = name[:-3]
-        kind = "base" if name == "base.md" else "agent" if stem in agents else "extra"
-        entries.append(
-            {
-                "name": name,
-                "path": _relative(path, repo),
-                "exists": path.is_file(),
-                "kind": kind,
-            }
-        )
-    return entries
-
-
 def _state(projection: config.MachineProjection) -> dict[str, Any]:
     repo = projection.repo
+    settings = config.load_settings(repo)
+    enabled = {agent.name for agent in projection.agents}
     agents = [
         {
-            "name": agent.name,
-            "mode": agent.mode,
-            "keys": dict(agent.target_templates),
+            "name": agent.id,
+            "display_name": agent.name,
+            "detected": agent.detected,
+            "enabled": agent.id in enabled,
+            "universal": agent.universal,
+            "mode": settings["mode"],
+            "keys": {
+                key: str(value)
+                for key, value in (
+                    ("skills_global", agent.skills_global),
+                    ("skills_project", agent.skills_project),
+                    ("instructions_global", agent.instructions_global),
+                ) if value is not None
+            },
         }
-        for agent in projection.agents
+        for agent in sorted(settings["agents"].values(), key=lambda item: item.id)
     ]
-    projects = [
+    warnings = []
+    try:
+        provenance = installed_skills.read_provenance(repo)
+    except ValueError as exc:
+        provenance = {}
+        warnings.append(str(exc))
+    projects: list[dict[str, Any]] = [
         {
             "name": project.name,
             "path": str(project.path) if project.path is not None else None,
@@ -234,53 +289,119 @@ def _state(projection: config.MachineProjection) -> dict[str, Any]:
         }
         for project in projection.projects
     ]
-    project_names = [project["name"] for project in projects]
-    global_agents = [
-        agent.name for agent in projection.agents if agent.instructions_global
-    ]
-    project_agents = [
-        agent.name for agent in projection.agents if agent.instructions_project
-    ]
-    skills_root = repo / "skills"
-    instructions_root = repo / "instructions"
-    config_dir = repo / "config"
-    known_configs = ["hub.toml", "agents.toml", "projects.toml", "skills.toml"]
-    if config_dir.is_dir():
-        for path in sorted(config_dir.glob("*.toml"), key=lambda item: item.name.lower()):
-            if path.name not in known_configs:
-                known_configs.append(path.name)
+    instruction_paths = [repo / "AGENTS.md"]
+    instruction_paths.extend(sorted((repo / "agents").glob("*.md")))
     return {
         "machine_id": projection.machine_id,
         "hostname": projection.hostname,
         "repo": str(repo),
+        "store": str(repo),
+        "hub_config_exists": (repo / "hub.toml").is_file(),
+        "warnings": warnings,
         "agents": agents,
         "projects": projects,
         "skills": {
-            "global": _skills(skills_root / "global", repo),
+            "global": _skills(repo / "skills", repo, provenance),
             "projects": {
-                name: _skills(skills_root / "projects" / name, repo)
-                for name in project_names
+                project.name: _skills(repo / "projects" / project.name / "skills", repo)
+                for project in projection.projects
             },
         },
         "instructions": {
-            "global": _instructions(
-                instructions_root / "global", repo, global_agents
-            ),
-            "projects": {
-                name: _instructions(
-                    instructions_root / "projects" / name, repo, project_agents
-                )
-                for name in project_names
-            },
+            "global": [
+                {
+                    "name": path.name,
+                    "path": _relative(path, repo),
+                    "exists": path.is_file(),
+                    "kind": "base" if path.name == "AGENTS.md" else "agent",
+                }
+                for path in instruction_paths
+            ],
+            "projects": {},
         },
         "config_files": [
             {
-                "name": name,
-                "path": _relative(config_dir / name, repo),
-                "exists": (config_dir / name).is_file(),
+                "name": "hub.toml",
+                "path": "hub.toml",
+                "exists": (repo / "hub.toml").is_file(),
             }
-            for name in known_configs
         ],
         "text_suffixes": sorted(files.TEXT_SUFFIXES),
         "max_file_bytes": files.MAX_FILE_BYTES,
     }
+
+
+@dataclasses.dataclass(frozen=True)
+class FleetStatusReport(core.StatusReport):
+    fleet: tuple[dict[str, Any], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**super().to_dict(), "fleet": list(self.fleet)}
+
+
+def _status(
+    projection: config.MachineProjection, include_fleet: bool
+) -> core.StatusReport:
+    report = core.status_report(projection)
+    if not include_fleet:
+        return report
+    machines = _fleet(projection.repo, projection.machine_id)
+    checks = list(report.checks)
+    local_problem = False
+    for machine in machines:
+        current = machine["current"]
+        behind = machine["behind"]
+        state = (
+            "current"
+            if current
+            else f"behind {behind}"
+            if behind is not None
+            else "unknown"
+        )
+        seconds = machine["age_seconds"]
+        age = f"{int(seconds)}s ago" if seconds is not None else "unknown"
+        local = machine["local"]
+        problems = machine["problems"]
+        bad = (
+            not current
+            or bool(problems)
+            or bool(machine.get("error"))
+            or bool(machine.get("status", {}).get("exit_code", 0))
+        )
+        local_problem |= local and bad
+        text = f"{machine['machine']}: {state}; {problems} problems; synced {age}"
+        if local:
+            text += "; local"
+        if machine.get("error"):
+            text += f"; {machine['error']}"
+        checks.append(
+            core.StatusCheck(
+                kind="fleet",
+                level="DRIFT" if local and bad else "warn" if bad else "ok",
+                text=text,
+            )
+        )
+    if not any(machine["local"] for machine in machines):
+        local_problem = True
+        checks.append(
+            core.StatusCheck(
+                kind="fleet",
+                level="MISSING",
+                text=f"{projection.machine_id}: no Machine record; run 'agent-hub sync'",
+            )
+        )
+    return FleetStatusReport(
+        machine_id=report.machine_id,
+        hostname=report.hostname,
+        repo=report.repo,
+        checks=tuple(checks),
+        exit_code=int(bool(report.exit_code or local_problem)),
+        fleet=tuple(machines),
+    )
+
+
+def _fleet(repo: Path, machine_id: str) -> list[dict[str, Any]]:
+    try:
+        return fleet_records.records(repo, machine_id)
+    except (ValueError, gitio.GitError) as exc:
+        raise config.ConfigError(f"{repo / 'machines'}: {exc}") from exc

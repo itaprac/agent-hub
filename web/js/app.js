@@ -2,8 +2,8 @@
 
 import { api } from "./api.js";
 import { $, $$, formatTime, toast } from "./dom.js";
-import { formDialog, projectField } from "./modals.js";
-import { mountPeers, refreshPeers, renderPeers } from "./peers.js";
+import { adoptProjectField, formDialog, projectField } from "./modals.js";
+import { mountFleet, refreshFleet, renderFleet } from "./fleet.js";
 import { renderLog, renderStatusView, summarize } from "./status.js";
 import { store, subscribe, update, withBusy } from "./store.js";
 import { mountSettings, renderSettings } from "./settings.js";
@@ -55,19 +55,14 @@ async function refreshAll({ log = false } = {}) {
   await refreshStatus({ log });
 }
 
-// The peers fan-out talks to other machines, so it only runs on explicit
-// refreshes, the 60 s timer and after a peer command — not after every save.
 async function refreshEverything({ log = false } = {}) {
-  announce("Refreshing repository and machine state");
+  announce("Refreshing Store and Fleet");
   try {
-    // /api/status and /api/peers both inspect the local repository. Keep them
-    // sequential now that the server rejects lock contention instead of waiting.
-    const tasks = [refreshState(), refreshStatus({ log })];
-    if (store.tab === "usage") tasks.push(refreshUsage());
-    await Promise.all(tasks);
-    await refreshPeers();
+    await refreshAll({ log });
+    await refreshFleet();
+    if (store.tab === "usage") await refreshUsage();
   } finally {
-    announce("Repository and machine state refreshed");
+    announce("Store and Fleet refreshed");
   }
 }
 
@@ -85,7 +80,7 @@ async function runHub(label, invoke) {
     if (result.exit_code === 0) {
       toast(`${label} finished`, "ok", 2400);
     } else {
-      const first = (result.lines || []).find((line) => ["ERROR", "DRIFT", "MISSING", "STALE"].includes(line.level));
+      const first = (result.lines || []).find((line) => ["ERROR", "DRIFT", "MISSING", "STALE", "CONFLICT"].includes(line.level));
       toast(`${label} exited ${result.exit_code}${first ? `: ${first.text}` : ""}`, "err", 9000);
       setLogOpen(true);
     }
@@ -94,16 +89,9 @@ async function runHub(label, invoke) {
   });
 }
 
-// A peer run reuses runHub, so the result lands in the same log drawer, raises
-// the same toasts and triggers the same follow-up refresh as a local command.
-function runPeer(machine, command, dryRun) {
+function runLocal(command, dryRun) {
   const suffix = dryRun ? " --dry-run" : "";
-  return runHub(`${machine}: ${command}${suffix}`, async () => {
-    const result = await api.peerRun(machine, command, dryRun);
-    result.machine = machine;
-    result.command = result.command || `${command}${suffix}`;
-    return result;
-  });
+  return runHub(`${command}${suffix}`, () => api.run(command, dryRun));
 }
 
 // ------------------------------------------------------------------ workspaces
@@ -139,8 +127,10 @@ function setupWorkspaces() {
     onChanged: afterEdit,
     onDirty: paintDirty,
     actions: [
-      { label: "New", title: "hub.py add-skill", run: newSkill },
-      { label: "Adopt", title: "hub.py adopt", run: adoptSkill },
+      { label: "Install", title: "Install a skill from a source", run: installSkill },
+      { label: "Update", title: "Update installed skills", run: updateSkills },
+      { label: "New", title: "agent-hub add-skill", run: newSkill },
+      { label: "Adopt", title: "agent-hub adopt", run: adoptSkill },
     ],
   });
   workspaces.instructions = createWorkspace($("#view-instructions"), {
@@ -157,11 +147,28 @@ function setupWorkspaces() {
   });
 }
 
+async function installSkill() {
+  const values = await formDialog({
+    title: "Install a skill",
+    sub: "Installs skills into this Store and records their source.",
+    confirmLabel: "Install",
+    fields: [
+      { name: "source", label: "Source", required: true, placeholder: "owner/repository or a URL" },
+      { name: "skill", label: "Skill (optional)", placeholder: "all skills from this source" },
+    ],
+  });
+  if (values) await runHub("install", () => api.install(values.source, values.skill));
+}
+
+async function updateSkills() {
+  await runHub("update", () => api.update());
+}
+
 async function newSkill() {
   const projects = store.state?.projects || [];
   const values = await formDialog({
     title: "New skill",
-    sub: "Runs hub.py add-skill and writes a SKILL.md template.",
+    sub: "Runs agent-hub add-skill and writes a SKILL.md template.",
     confirmLabel: "Create skill",
     fields: [
       { name: "name", label: "Skill name", required: true, placeholder: "code-review" },
@@ -173,14 +180,13 @@ async function newSkill() {
 }
 
 async function adoptSkill() {
-  const projects = store.state?.projects || [];
   const values = await formDialog({
     title: "Adopt an existing skill",
-    sub: "Moves a directory into the repository and leaves a symlink behind.",
+    sub: "Moves a directory into the Store and leaves a symlink behind.",
     confirmLabel: "Adopt",
     fields: [
       { name: "path", label: "Directory path", required: true, placeholder: "~/.claude/skills/my-skill" },
-      projectField(projects),
+      adoptProjectField(),
       { name: "name", label: "Skill name (optional)", placeholder: "defaults to the directory name" },
     ],
   });
@@ -232,8 +238,9 @@ function renderChrome(snapshot) {
   $("#repo-path").title = state ? state.repo : "";
 
   const banner = $("#banner");
-  banner.hidden = !snapshot.stateError;
-  banner.textContent = snapshot.stateError ? `configuration error: ${snapshot.stateError}` : "";
+  const messages = snapshot.stateError ? [`configuration error: ${snapshot.stateError}`] : state?.warnings || [];
+  banner.hidden = !messages.length;
+  banner.textContent = messages.join(" · ");
 
   const busy = snapshot.busy > 0;
   $("#progress").hidden = !busy;
@@ -242,7 +249,7 @@ function renderChrome(snapshot) {
 
 function render(snapshot) {
   renderChrome(snapshot);
-  renderPeers(snapshot);
+  renderFleet(snapshot);
   renderStatusView(snapshot);
   renderUsage(snapshot);
   renderSettings(snapshot);
@@ -257,8 +264,7 @@ function render(snapshot) {
 // ------------------------------------------------------------------ boot
 
 function wire() {
-  // The one global refresh: state + status + peers. Apply/Sync live on the
-  // machine cards (the local machine always has one, see SPEC-PEERS section 2).
+  // Refresh local Store state and its Machine records.
   $("#btn-refresh").addEventListener("click", () => withBusy(() => refreshEverything({ log: true })));
 
   const tabs = $$(".tab");
@@ -354,7 +360,7 @@ async function boot() {
 
   setupWorkspaces();
   wire();
-  mountPeers({ run: runPeer });
+  mountFleet({ run: runLocal });
   mountUsage();
   mountSettings();
   subscribe(render);

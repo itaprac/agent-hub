@@ -198,7 +198,7 @@ def _source_enabled(settings: dict[str, Any], name: str) -> bool:
 
 
 def load_settings() -> dict[str, Any]:
-    settings = dict(SOURCE_DEFAULTS)
+    settings: dict[str, Any] = dict(SOURCE_DEFAULTS)
     path = _settings_path()
     if path.is_file():
         try:
@@ -653,6 +653,7 @@ def _parse_grok_line(line: str) -> list[dict[str, Any]]:
     usage = update.get("usage")
     if not isinstance(usage, dict):
         return []
+    timestamp_ms: int | None
     raw_ts = record.get("timestamp")
     if isinstance(raw_ts, (int, float)) and raw_ts > 0:
         timestamp_ms = int(raw_ts if raw_ts > 1_000_000_000_000 else raw_ts * 1000)
@@ -909,6 +910,8 @@ def _build_summary(days: int, time_zone: str | None, settings: dict[str, Any]) -
     zone, time_zone = _resolve_time_zone(time_zone)
 
     now = datetime.now(zone)
+    since_time: datetime | None
+    until_time: datetime | None
     until_day = now.date()
     if days == 1:
         since_time = now - timedelta(hours=24)
@@ -1127,6 +1130,9 @@ def read_summary(
 
     try:
         summary = _build_summary(days, time_zone, current_settings)
+        summary["rollups"] = _build_rollups(
+            summary["buckets"], summary["sources"], str(summary.get("resolution") or "day")
+        )
     except BaseException:
         with _SNAPSHOT_LOCK:
             _SNAPSHOT_INFLIGHT.pop(key, None)
@@ -1140,33 +1146,6 @@ def read_summary(
         _SNAPSHOT_INFLIGHT.pop(key, None)
         pending.set()
     return copy.deepcopy(summary)
-
-
-def attach_machine(summary: dict[str, Any], machine: str) -> dict[str, Any]:
-    summary["machine"] = machine
-    for source in summary.get("sources") or []:
-        source["machine"] = machine
-    return summary
-
-
-def peer_failure(machine: str, message: str) -> dict[str, Any]:
-    return {
-        "machine": machine,
-        "buckets": [],
-        "sources": [
-            {
-                "provider": "hub",
-                "path": "",
-                "status": "failed",
-                "scannedFiles": 0,
-                "sessions": 0,
-                "message": message,
-                "machine": machine,
-            }
-        ],
-        "pricing": {"status": "unavailable", "source": "", "knownModels": 0},
-        "scanDurationMs": 0,
-    }
 
 
 def _empty_rollup() -> dict[str, int | float]:
@@ -1271,10 +1250,8 @@ def _dimension_rollups(
 
 def _build_rollups(
     buckets: list[dict[str, Any]],
-    machine_buckets: list[tuple[str, dict[str, Any]]],
     sources: list[dict[str, Any]],
     resolution: str,
-    machines: list[str],
 ) -> dict[str, Any]:
     present = {
         str(item.get("provider"))
@@ -1320,16 +1297,6 @@ def _build_rollups(
         row["costShare"] = row["costUsd"] / total["costUsd"] if total["costUsd"] else 0
     by_model.sort(key=lambda row: row["costUsd"], reverse=True)
 
-    by_machine = _dimension_rollups(
-        machines,
-        "machine",
-        machine_buckets,
-        [
-            (str(source["machine"]), int(source.get("sessions") or 0))
-            for source in sources
-            if source.get("machine")
-        ],
-    )
     by_source = _dimension_rollups(
         source_names,
         "source",
@@ -1354,86 +1321,5 @@ def _build_rollups(
         "daily": daily,
         "weekly": weekly,
         "byModel": by_model,
-        "byMachine": by_machine,
         "bySource": by_source,
     }
-
-
-def merge_summaries(parts: list[dict[str, Any]]) -> dict[str, Any]:
-    """Fold per-machine summaries the way T3 merges environments."""
-    if not parts:
-        return peer_failure("local", "no usage summaries")
-    primary = parts[0]
-    cursor_owner = None
-    for part in parts:
-        for source in part.get("sources") or []:
-            if source.get("provider") == "cursor" and source.get("status") == "ok":
-                cursor_owner = part.get("machine")
-                break
-        if cursor_owner is not None:
-            break
-    cells: dict[tuple[str, str, str, str], dict[str, Any]] = {}
-    sources: list[dict[str, Any]] = []
-    machine_buckets: list[tuple[str, dict[str, Any]]] = []
-    duration = 0
-    for part in parts:
-        duration = max(duration, int(part.get("scanDurationMs") or 0))
-        skip_cursor = cursor_owner is not None and part.get("machine") != cursor_owner
-        for source in part.get("sources") or []:
-            if skip_cursor and source.get("provider") == "cursor":
-                continue
-            sources.append(source)
-        for bucket in part.get("buckets") or []:
-            if skip_cursor and bucket.get("provider") == "cursor":
-                continue
-            machine = part.get("machine")
-            if machine:
-                machine_buckets.append((machine, bucket))
-            key = (
-                bucket.get("day") or "",
-                bucket.get("hourStart") or "",
-                bucket.get("provider") or "",
-                bucket.get("model") or "",
-            )
-            cell = cells.get(key)
-            if cell is None:
-                cell = {
-                    "day": bucket.get("day"),
-                    "hourStart": bucket.get("hourStart"),
-                    "provider": bucket.get("provider"),
-                    "model": bucket.get("model"),
-                    "totals": _empty_totals(),
-                    "costUsd": 0.0,
-                    "cacheSavingsUsd": 0.0,
-                    "records": 0,
-                    "unpricedRecords": 0,
-                    "sessions": 0,
-                }
-                cells[key] = cell
-            _add_totals(cell["totals"], bucket.get("totals") or _empty_totals())
-            cell["costUsd"] += float(bucket.get("costUsd") or 0)
-            cell["cacheSavingsUsd"] += float(bucket.get("cacheSavingsUsd") or 0)
-            cell["records"] += int(bucket.get("records") or 0)
-            cell["unpricedRecords"] += int(bucket.get("unpricedRecords") or 0)
-            cell["sessions"] += int(bucket.get("sessions") or 0)
-    out_buckets = []
-    for cell in cells.values():
-        cell["costUsd"] = round(cell["costUsd"], 6)
-        cell["cacheSavingsUsd"] = round(cell["cacheSavingsUsd"], 6)
-        out_buckets.append(cell)
-    out_buckets.sort(key=lambda item: (item["day"] or "", item.get("hourStart") or "", item["provider"], item["model"]))
-    merged = dict(primary)
-    merged["buckets"] = out_buckets
-    merged["sources"] = sources
-    merged["scanDurationMs"] = duration
-    merged["machines"] = [part.get("machine") for part in parts if part.get("machine")]
-    merged["rollups"] = _build_rollups(
-        out_buckets,
-        machine_buckets,
-        sources,
-        str(primary.get("resolution") or "day"),
-        merged["machines"],
-    )
-    if isinstance(primary.get("settings"), dict):
-        merged["settings"] = public_settings(primary["settings"])
-    return merged

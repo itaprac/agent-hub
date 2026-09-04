@@ -5,7 +5,9 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
+import re
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -22,11 +24,9 @@ from .config import (
 
 BEGIN_MARKER = "<!-- agent-hub:begin -->"
 END_MARKER = "<!-- agent-hub:end -->"
-MANAGED_NOTICE = (
-    "<!-- Managed by agent-hub. Edit in the content repo; local edits are overwritten. -->"
-)
+MANAGED_NOTICE = "<!-- Managed by agent-hub. Edit ~/.agents/AGENTS.md; local edits inside this block are overwritten. -->"
 
-PROBLEM_LEVELS = frozenset({"MISSING", "DRIFT", "STALE", "ERROR"})
+PROBLEM_LEVELS = frozenset({"MISSING", "DRIFT", "STALE", "CONFLICT", "ERROR"})
 
 
 def iter_orphaned_skill_links(projection: MachineProjection):
@@ -46,7 +46,9 @@ def iter_orphaned_skill_links(projection: MachineProjection):
                 yield entry, destination
 
 
-def prune_skill_links(projection: MachineProjection, dry_run: bool) -> list[StatusCheck]:
+def prune_skill_links(
+    projection: MachineProjection, dry_run: bool
+) -> list[StatusCheck]:
     checks = []
     for link, destination in iter_orphaned_skill_links(projection):
         if not dry_run:
@@ -71,6 +73,7 @@ def target_label(item: SkillTarget | InstructionTarget) -> str:
 
 # ----------------------------------------------------------------------- files
 
+
 def hash_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -82,11 +85,18 @@ def hash_file(path: Path) -> str:
 def tree_hashes(root: Path) -> dict[str, str]:
     if not root.is_dir():
         return {}
-    return {
-        str(path.relative_to(root)): hash_file(path)
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
+    entries = {}
+    for directory, directories, files in os.walk(root, followlinks=False):
+        for name in sorted(directories + files):
+            path = Path(directory) / name
+            relative = str(path.relative_to(root))
+            if path.is_symlink():
+                entries[relative] = "link:" + os.readlink(path)
+            elif path.is_dir():
+                entries[relative] = "directory"
+            elif path.is_file():
+                entries[relative] = "file:" + hash_file(path)
+    return entries
 
 
 def same_symlink(target: Path, source: Path) -> bool:
@@ -94,7 +104,7 @@ def same_symlink(target: Path, source: Path) -> bool:
         return False
     try:
         return target.resolve(strict=False) == source.resolve(strict=False)
-    except OSError:
+    except (OSError, RuntimeError):
         return False
 
 
@@ -112,26 +122,30 @@ def render_managed(existing: str | None, content: str) -> tuple[str, bool]:
     if existing is None or existing == "":
         return block + "\n", False
 
-    begin_count = existing.count(BEGIN_MARKER)
-    end_count = existing.count(END_MARKER)
-    begin_prefix_count = existing.count("<!-- agent-hub:begin")
-    if begin_prefix_count != begin_count:
+    begins = list(
+        re.finditer(r"(?m)^" + re.escape(BEGIN_MARKER) + r"(?=\r?$)", existing)
+    )
+    ends = list(re.finditer(r"(?m)^" + re.escape(END_MARKER) + r"(?=\r?$)", existing))
+    begin_count = existing.count("<!-- agent-hub:begin")
+    end_count = existing.count("<!-- agent-hub:end")
+    if begin_count != len(begins) or end_count != len(ends):
         return existing, True
-    if begin_count == 0 and end_count == 0:
-        separator = "" if existing.endswith("\n\n") else "\n" if existing.endswith("\n") else "\n\n"
+    if not begins and not ends:
+        separator = (
+            ""
+            if existing.endswith("\n\n")
+            else "\n"
+            if existing.endswith("\n")
+            else "\n\n"
+        )
         return existing + separator + block + "\n", False
-    if begin_count != 1 or end_count != 1:
+    if len(begins) != 1 or len(ends) != 1 or begins[0].start() > ends[0].start():
         return existing, True
-
-    begin = existing.index(BEGIN_MARKER)
-    end_position = existing.find(END_MARKER, begin + len(BEGIN_MARKER))
-    if end_position < 0:
-        return existing, True
-    end = end_position + len(END_MARKER)
-    return existing[:begin] + block + existing[end:], False
+    return existing[: begins[0].start()] + block + existing[ends[0].end() :], False
 
 
 # --------------------------------------------------------------------- reports
+
 
 @dataclasses.dataclass(frozen=True)
 class StatusCheck:
@@ -243,6 +257,7 @@ class SyncReport(Report):
 
 # ----------------------------------------------------------------------- apply
 
+
 def skill_fields(item: SkillTarget) -> dict[str, Any]:
     return {
         "kind": "skill",
@@ -253,7 +268,9 @@ def skill_fields(item: SkillTarget) -> dict[str, Any]:
     }
 
 
-def apply_symlink(item: SkillTarget, dry_run: bool) -> StatusCheck:
+def apply_symlink(
+    item: SkillTarget, dry_run: bool, store: Path | None = None
+) -> StatusCheck:
     source = item.source
     target = item.target
     label = target_label(item)
@@ -261,29 +278,50 @@ def apply_symlink(item: SkillTarget, dry_run: bool) -> StatusCheck:
     if same_symlink(target, source):
         return StatusCheck(level="ok", text=label, **fields)
     if target.is_symlink():
+        try:
+            owned = target.resolve(strict=False).is_relative_to(
+                (store or source.parent.parent).resolve()
+            )
+        except (OSError, RuntimeError):
+            owned = False
+        if not owned:
+            return StatusCheck(
+                level="DRIFT",
+                text=f"{label} is a foreign symlink; leave it unchanged",
+                **fields,
+            )
         if not dry_run:
             target.unlink()
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.symlink_to(source, target_is_directory=True)
+            target.symlink_to(
+                os.path.relpath(source, target.parent), target_is_directory=True
+            )
         return StatusCheck(level="link", text=f"replace {label} -> {source}", **fields)
     if target.exists():
         return StatusCheck(
-            level="DRIFT", text=f"{label} is not a symlink; run: hub adopt {target}", **fields
+            level="DRIFT",
+            text=f"{label} is not a symlink; run: agent-hub adopt {target}",
+            **fields,
         )
     if not dry_run:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.symlink_to(source, target_is_directory=True)
+        target.symlink_to(
+            os.path.relpath(source, target.parent), target_is_directory=True
+        )
     return StatusCheck(level="link", text=f"{label} -> {source}", **fields)
 
 
 def remove_extra_copy_paths(source: Path, target: Path) -> None:
-    target_paths = sorted(target.rglob("*"), key=lambda path: len(path.parts), reverse=True)
+    target_paths = sorted(
+        target.rglob("*"), key=lambda path: len(path.parts), reverse=True
+    )
     for path in target_paths:
         relative = path.relative_to(target)
         source_path = source / relative
         source_exists = source_path.exists() or source_path.is_symlink()
         same_kind = (
             source_exists
+            and not source_path.is_symlink()
             and not path.is_symlink()
             and (
                 (path.is_dir() and source_path.is_dir())
@@ -303,33 +341,65 @@ def apply_copy(item: SkillTarget, dry_run: bool) -> StatusCheck:
     target = item.target
     label = target_label(item)
     fields = skill_fields(item)
-    if target.is_dir() and not target.is_symlink() and tree_hashes(source) == tree_hashes(target):
+    if (
+        target.is_dir()
+        and not target.is_symlink()
+        and tree_hashes(source) == tree_hashes(target)
+    ):
         return StatusCheck(level="ok", text=label, **fields)
-    if (target.exists() or target.is_symlink()) and (not target.is_dir() or target.is_symlink()):
+    if (target.exists() or target.is_symlink()) and (
+        not target.is_dir() or target.is_symlink()
+    ):
         return StatusCheck(
-            level="DRIFT", text=f"{label} cannot be copied over a non-directory target", **fields
+            level="DRIFT",
+            text=f"{label} cannot be copied over a non-directory target",
+            **fields,
         )
     if not dry_run:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.mkdir(parents=True, exist_ok=True)
         remove_extra_copy_paths(source, target)
-        shutil.copytree(source, target, dirs_exist_ok=True)
+        shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
     return StatusCheck(level="copy", text=f"{label} <- {source}", **fields)
+
+
+def instruction_target_is_source(item: InstructionTarget) -> bool:
+    """Prevent a managed block from replacing any of its own source files."""
+    target = item.target
+    try:
+        return any(
+            target.resolve() == source.resolve()
+            or (target.exists() and source.exists() and target.samefile(source))
+            for source in item.sources
+        )
+    except (OSError, RuntimeError):
+        # An unreadable source identity cannot establish a safe write target.
+        return True
 
 
 def apply_instruction(item: InstructionTarget, dry_run: bool) -> StatusCheck:
     target = item.target
     label = target_label(item)
-    fields = {
+    fields: dict[str, Any] = {
         "kind": "instruction",
         "agent": item.agent,
         "project": item.project,
         "target": str(target),
     }
+    if instruction_target_is_source(item):
+        return StatusCheck(
+            level="DRIFT",
+            text=f"{label} is an instruction source; leave it unchanged",
+            **fields,
+        )
     if target.is_symlink() and not target.exists():
         return StatusCheck(level="DRIFT", text=f"{label} is a broken symlink", **fields)
+    if target.is_symlink():
+        return StatusCheck(level="DRIFT", text=f"{label} is a symlink", **fields)
     if target.exists() and not target.is_file():
-        return StatusCheck(level="DRIFT", text=f"{label} is not a regular file", **fields)
+        return StatusCheck(
+            level="DRIFT", text=f"{label} is not a regular file", **fields
+        )
     if target.exists():
         existing = read_text_preserving_newlines(target)
     else:
@@ -337,7 +407,9 @@ def apply_instruction(item: InstructionTarget, dry_run: bool) -> StatusCheck:
     rendered, malformed = render_managed(existing, item.content)
     if malformed:
         return StatusCheck(
-            level="DRIFT", text=f"{label} has malformed or duplicate managed markers", **fields
+            level="DRIFT",
+            text=f"{label} has malformed or duplicate managed markers",
+            **fields,
         )
     if existing == rendered:
         return StatusCheck(level="ok", text=label, **fields)
@@ -361,9 +433,15 @@ def apply_report(projection: MachineProjection, dry_run: bool = False) -> ApplyR
     ]
     checks.extend(prune_skill_links(projection, dry_run))
     for item in projection.skill_targets:
-        checks.append(SKILL_APPLIERS[item.mode](item, dry_run))
-    for item in projection.instruction_targets:
-        checks.append(apply_instruction(item, dry_run))
+        if item.mode == "symlink":
+            checks.append(apply_symlink(item, dry_run, projection.repo))
+        else:
+            checks.append(apply_copy(item, dry_run))
+    for instruction in projection.instruction_targets:
+        checks.append(apply_instruction(instruction, dry_run))
+    from .projects import apply_links
+
+    checks.extend(apply_links(projection, dry_run=dry_run))
     problems = sum(1 for check in checks if check.level in PROBLEM_LEVELS)
     return ApplyReport(
         machine_id=projection.machine_id,
@@ -376,6 +454,7 @@ def apply_report(projection: MachineProjection, dry_run: bool = False) -> ApplyR
 
 
 # ---------------------------------------------------------------------- status
+
 
 def check_copy_skill(item: SkillTarget) -> StatusCheck:
     source = item.source
@@ -410,7 +489,9 @@ def check_symlink_skill(item: SkillTarget) -> StatusCheck:
         except OSError:
             destination = "unreadable"
         return StatusCheck(
-            level="DRIFT", text=f"{label} points to {destination}, expected {source}", **fields
+            level="DRIFT",
+            text=f"{label} points to {destination}, expected {source}",
+            **fields,
         )
     if target.exists():
         return StatusCheck(level="DRIFT", text=f"{label} is not a symlink", **fields)
@@ -428,25 +509,43 @@ def check_skill(item: SkillTarget) -> StatusCheck:
 def check_instruction(item: InstructionTarget) -> StatusCheck:
     target = item.target
     label = target_label(item)
-    fields = {
+    fields: dict[str, Any] = {
         "kind": "instruction",
         "agent": item.agent,
         "project": item.project,
         "name": None,
         "target": str(target),
     }
+    if instruction_target_is_source(item):
+        return StatusCheck(
+            level="DRIFT",
+            text=f"{label} is an instruction source; leave it unchanged",
+            **fields,
+        )
+    if target.is_symlink():
+        return StatusCheck(level="DRIFT", text=f"{label} is a symlink", **fields)
     if not target.exists():
         return StatusCheck(level="MISSING", text=label, **fields)
     if not target.is_file():
-        return StatusCheck(level="DRIFT", text=f"{label} is not a regular file", **fields)
+        return StatusCheck(
+            level="DRIFT", text=f"{label} is not a regular file", **fields
+        )
     existing = read_text_preserving_newlines(target)
     rendered, malformed = render_managed(existing, item.content)
-    if malformed or BEGIN_MARKER not in existing or END_MARKER not in existing:
+    if malformed:
         return StatusCheck(
-            level="STALE", text=f"{label} has missing or malformed managed markers", **fields
+            level="DRIFT",
+            text=f"{label} has malformed or duplicate managed markers",
+            **fields,
+        )
+    if BEGIN_MARKER not in existing or END_MARKER not in existing:
+        return StatusCheck(
+            level="STALE", text=f"{label} has missing managed markers", **fields
         )
     if existing != rendered:
-        return StatusCheck(level="STALE", text=f"{label} managed content is out of date", **fields)
+        return StatusCheck(
+            level="STALE", text=f"{label} managed content is out of date", **fields
+        )
     return StatusCheck(level="ok", text=label, **fields)
 
 
@@ -467,7 +566,9 @@ def check_git(repo: Path) -> list[StatusCheck]:
         return [git_check("ERROR", f"git: {one_line(str(exc))}")]
 
     checks = [
-        git_check("DRIFT", f"git: working tree has {len(entries)} uncommitted change(s)")
+        git_check(
+            "DRIFT", f"git: working tree has {len(entries)} uncommitted change(s)"
+        )
         if dirty
         else git_check("ok", "git: working tree clean")
     ]
@@ -479,13 +580,21 @@ def check_git(repo: Path) -> list[StatusCheck]:
     try:
         ahead, behind = gitio.divergence(repo)
     except gitio.GitOutputError as exc:
-        checks.append(git_check("ERROR", f"git: unexpected rev-list output: {one_line(str(exc))}"))
+        checks.append(
+            git_check("ERROR", f"git: unexpected rev-list output: {one_line(str(exc))}")
+        )
         return checks
     except gitio.GitCommandError as exc:
-        checks.append(git_check("ERROR", f"git: cannot compare with {upstream}: {one_line(str(exc))}"))
+        checks.append(
+            git_check(
+                "ERROR", f"git: cannot compare with {upstream}: {one_line(str(exc))}"
+            )
+        )
         return checks
     if ahead or behind:
-        checks.append(git_check("DRIFT", f"git: {ahead} ahead, {behind} behind {upstream}"))
+        checks.append(
+            git_check("DRIFT", f"git: {ahead} ahead, {behind} behind {upstream}")
+        )
     else:
         checks.append(git_check("ok", f"git: even with {upstream}"))
     return checks
@@ -513,6 +622,9 @@ def status_report(projection: MachineProjection) -> StatusReport:
         )
     checks.extend(check_skill(item) for item in projection.skill_targets)
     checks.extend(check_instruction(item) for item in projection.instruction_targets)
+    from .projects import check_links
+
+    checks.extend(check_links(projection))
     checks.extend(check_git(projection.repo))
     problems = sum(1 for check in checks if check.level in PROBLEM_LEVELS)
     return StatusReport(
@@ -526,6 +638,7 @@ def status_report(projection: MachineProjection) -> StatusReport:
 
 # ------------------------------------------------------------------------ sync
 
+
 def git_action(
     repo: Path, args: list[str], description: str
 ) -> tuple[list[StatusCheck], bool]:
@@ -537,7 +650,9 @@ def git_action(
         if line
     ]
     if result.returncode != 0:
-        detail = result.stderr.strip() or f"git {' '.join(args)} exited {result.returncode}"
+        detail = (
+            result.stderr.strip() or f"git {' '.join(args)} exited {result.returncode}"
+        )
         checks.append(
             StatusCheck(
                 kind="git",
@@ -553,13 +668,77 @@ def git_action(
     return checks, True
 
 
-def sync_report(projection: MachineProjection, dry_run: bool = False) -> SyncReport:
-    """Commit, pull, apply, and push, then return the structured result."""
+def _rebase_directory(repo: Path) -> Path:
+    result = gitio.run_git(repo, "rev-parse", "--git-dir")
+    if result.returncode:
+        raise gitio.GitCommandError(result.stderr.strip())
+    directory = Path(result.stdout.strip())
+    return directory if directory.is_absolute() else repo / directory
+
+
+def _rebasing(directory: Path) -> bool:
+    return any((directory / name).exists() for name in ("rebase-merge", "rebase-apply"))
+
+
+def _remote_unreachable(detail: str) -> bool:
+    text = detail.lower()
+    if any(phrase in text for phrase in (
+        "authentication failed", "permission denied", "repository not found",
+        "returned error: 401", "returned error: 403", "returned error: 404",
+        "could not read username", "invalid credentials",
+    )):
+        return False
+    return any(phrase in text for phrase in (
+        "could not resolve", "couldn't resolve", "could not read from remote repository",
+        "does not appear to be a git repository", "connection refused",
+        "connection timed out", "network is unreachable", "no route to host",
+        "connection closed", "connection reset", "failed to connect", "timed out",
+    ))
+
+
+def _resolve_rebase_conflicts(repo: Path, side: str) -> bool:
+    """Resolve remaining conflicts, including modify/delete, toward one rebase side."""
+    result = gitio.run_git(repo, "ls-files", "--unmerged", "-z")
+    if result.returncode:
+        raise gitio.GitCommandError(result.stderr.strip())
+    stages: dict[str, set[str]] = {}
+    for entry in result.stdout.split("\0"):
+        if not entry:
+            continue
+        metadata, path = entry.split("\t", 1)
+        stages.setdefault(path, set()).add(metadata.split()[2])
+    if not stages:
+        return False
+    wanted_stage = "3" if side == "theirs" else "2"
+    for path, available in stages.items():
+        commands: tuple[list[str], ...]
+        if wanted_stage in available:
+            commands = (["checkout", f"--{side}", "--", path], ["add", "--", path])
+        else:
+            commands = (["rm", "-f", "--", path],)
+        for command in commands:
+            completed = gitio.run_git(repo, *command)
+            if completed.returncode:
+                raise gitio.GitCommandError(completed.stderr.strip())
+    return True
+
+
+def sync_report(
+    projection: MachineProjection, dry_run: bool = False, prefer: str | None = None
+) -> SyncReport:
+    """Commit, pull, apply, record this Machine, and push under the caller's lock."""
+    from . import fleet
+
     repo = projection.repo
-    # The report keeps the identity that made the commit, not the reloaded one.
-    machine_id = projection.machine_id
-    hostname = projection.hostname
+    machine_id, hostname = projection.machine_id, projection.hostname
     checks: list[StatusCheck] = []
+    started_pull = False
+    directory: Path | None = None
+
+    def note(level: str, text: str, kind: str = "git") -> None:
+        checks.append(
+            StatusCheck(kind=kind, level=level, text=one_line(text), target=str(repo))
+        )
 
     def report(exit_code: int) -> SyncReport:
         return SyncReport(
@@ -571,97 +750,168 @@ def sync_report(projection: MachineProjection, dry_run: bool = False) -> SyncRep
             dry_run=dry_run,
         )
 
-    def git_check(level: str, text: str) -> StatusCheck:
-        return StatusCheck(kind="git", level=level, text=text, target=str(repo))
+    def action(*args: str) -> None:
+        completed = gitio.run_git(repo, *args, timeout=60)
+        if completed.returncode:
+            raise gitio.GitCommandError(
+                completed.stderr.strip() or completed.stdout.strip()
+            )
 
-    if not gitio.is_repository(repo):
-        checks.append(git_check("ERROR", f"git: {repo} is not a git repository"))
-        return report(1)
     try:
+        if prefer not in (None, "local", "remote"):
+            raise ValueError("prefer must be 'local' or 'remote'")
+        if not gitio.is_repository(repo):
+            raise ValueError(f"{repo} is not a Git repository")
+        directory = _rebase_directory(repo)
+        if _rebasing(directory) or any(
+            (directory / name).exists()
+            for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "sequencer")
+        ):
+            raise ValueError(
+                "Store has an unfinished Git operation; finish it before sync"
+            )
         dirty, _ = gitio.dirty(repo)
-    except RuntimeError as exc:
-        checks.append(git_check("ERROR", f"git: {one_line(str(exc))}"))
-        return report(1)
-
-    if dirty:
-        message = f"hub sync: {machine_id}"
-        if dry_run:
-            checks.append(
-                git_check("commit", f"would run git add -A and commit: {message}")
-            )
+        if dirty:
+            message = f"sync: {machine_id}"
+            if dry_run:
+                note("ok", f"would run git add -A and commit: {message}")
+            else:
+                action("add", "-A")
+                action("commit", "-m", message)
+                note("ok", f"git commit: {message}")
         else:
-            action_checks, ok = git_action(repo, ["add", "-A"], "git add -A")
-            checks.extend(action_checks)
-            if not ok:
-                return report(1)
-            action_checks, ok = git_action(
-                repo, ["commit", "-m", message], f"git commit: {message}"
-            )
-            checks.extend(action_checks)
-            if not ok:
-                return report(1)
-    else:
-        checks.append(git_check("ok", "git: nothing to commit"))
-
-    remotes = gitio.remotes(repo)
-    upstream = gitio.upstream(repo)
-    if remotes and upstream:
-        if dry_run:
-            checks.append(
-                git_check("pull", f"would run git pull --rebase from {upstream}")
-            )
+            note("ok", "git: nothing to commit")
+        upstream = gitio.upstream(repo)
+        remotes = gitio.remotes(repo)
+        reachable = True
+        if remotes and upstream:
+            if dry_run:
+                note("ok", f"would run git pull --rebase from {upstream}")
+            else:
+                try:
+                    started_pull = True
+                    pulled = gitio.run_git(repo, "pull", "--rebase", timeout=60)
+                except gitio.GitCommandError as exc:
+                    if _rebasing(directory) or not _remote_unreachable(str(exc)):
+                        raise
+                    reachable = False
+                    note("warn", f"origin unreachable; push pending: {exc}")
+                else:
+                    if pulled.returncode and _rebasing(directory):
+                        conflict = gitio.run_git(
+                            repo, "diff", "--name-only", "--diff-filter=U"
+                        )
+                        paths = (
+                            ", ".join(conflict.stdout.splitlines()) or "unknown files"
+                        )
+                        action("rebase", "--abort")
+                        if prefer is None:
+                            note(
+                                "CONFLICT",
+                                f"sync conflict in {paths}; pull aborted; apply was not run",
+                            )
+                            return report(1)
+                        side = "theirs" if prefer == "local" else "ours"
+                        retried = gitio.run_git(
+                            repo, "pull", "--rebase", f"-X{side}", timeout=60
+                        )
+                        while retried.returncode and _rebasing(directory):
+                            if not _resolve_rebase_conflicts(repo, side):
+                                break
+                            retried = gitio.run_git(
+                                repo,
+                                "-c",
+                                "core.editor=true",
+                                "rebase",
+                                "--continue",
+                                timeout=60,
+                            )
+                        if retried.returncode:
+                            if _rebasing(directory):
+                                action("rebase", "--abort")
+                            note(
+                                "CONFLICT",
+                                f"could not resolve {paths} with --prefer {prefer}; apply was not run",
+                            )
+                            return report(1)
+                        note("ok", f"resolved pull conflicts with --prefer {prefer}")
+                    elif pulled.returncode:
+                        detail = pulled.stderr.strip() or pulled.stdout.strip()
+                        if _remote_unreachable(detail):
+                            reachable = False
+                            note("warn", f"origin unreachable; push pending: {detail}")
+                        else:
+                            raise gitio.GitCommandError(
+                                f"pull failed; apply was not run: {detail}"
+                            )
+                    else:
+                        note("ok", "git pull --rebase")
+        elif not remotes:
+            note("skip", "no remote; pull and push disabled")
         else:
-            action_checks, ok = git_action(
-                repo, ["pull", "--rebase"], "git pull --rebase"
-            )
-            checks.extend(action_checks)
-            if not ok:
-                checks.append(
-                    git_check(
-                        "ERROR",
-                        "sync stopped after pull/rebase failure; apply and push were not run",
-                    )
-                )
-                return report(1)
-    elif not remotes:
-        checks.append(
-            git_check("skip", "git: no remote configured; pull and push disabled")
-        )
-    else:
-        checks.append(
-            git_check(
-                "skip", "git: remote exists but no upstream is configured; pull disabled"
-            )
-        )
-
-    # The pull may have changed config/, so apply must not use the context
-    # loaded before it (a freshly pulled skills.toml restriction would be
-    # invisible while the new skill directory is already on disk).
-    if not dry_run:
-        try:
+            note("skip", "no upstream configured; pull and push disabled")
+        if not dry_run:
             projection = load_machine_projection(repo)
-        except ConfigError as exc:
-            checks.append(
-                StatusCheck(
-                    kind="config",
-                    level="ERROR",
-                    text=one_line(str(exc)),
-                    target=str(repo),
-                )
-            )
-            return report(1)
-
-    applied = apply_report(projection, dry_run=dry_run)
-    checks.extend(applied.checks)
-
-    push_ok = True
-    if remotes:
+        applied = apply_report(projection, dry_run=dry_run)
+        checks.extend(applied.checks)
         if dry_run:
-            checks.append(git_check("push", "would run git push"))
+            note(
+                "ok",
+                "would update the Machine record if changed or older than 24 hours",
+                "machine",
+            )
         else:
-            action_checks, push_ok = git_action(repo, ["push"], "git push")
-            checks.extend(action_checks)
-    return report(1 if applied.exit_code or not push_ok else 0)
+            head = gitio.run_git(repo, "rev-parse", "HEAD")
+            if head.returncode:
+                raise gitio.GitCommandError(head.stderr.strip())
+            written = fleet.write_record(
+                repo,
+                machine_id=machine_id,
+                hostname=hostname,
+                agents=[agent.name for agent in projection.agents],
+                head=head.stdout.strip(),
+                exit_code=applied.exit_code,
+                problems=applied.problems,
+            )
+            if written:
+                action("add", "--", f"machines/{machine_id}.json")
+                action("commit", "-m", f"machine: {machine_id}")
+                note("ok", f"recorded Machine {machine_id}", "machine")
+            else:
+                note("ok", f"Machine {machine_id} record unchanged", "machine")
+        if remotes and upstream and reachable:
+            if dry_run:
+                note("ok", "would run git push")
+            else:
+                try:
+                    pushed = gitio.run_git(repo, "push", timeout=60)
+                except gitio.GitCommandError as exc:
+                    if _rebasing(directory) or not _remote_unreachable(str(exc)):
+                        raise
+                    note("warn", f"origin unreachable; push pending: {exc}")
+                else:
+                    if pushed.returncode:
+                        detail = pushed.stderr.strip() or pushed.stdout.strip()
+                        if _remote_unreachable(detail):
+                            note("warn", f"origin unreachable; push pending: {detail}")
+                        elif "non-fast-forward" in detail.lower() or (
+                            "[rejected]" in detail.lower()
+                            and "(fetch first)" in detail.lower()
+                        ):
+                            note("warn", f"push rejected; push pending: {detail}")
+                        else:
+                            raise gitio.GitCommandError(f"push failed: {detail}")
+                    else:
+                        note("ok", "git push")
+        return report(applied.exit_code)
+    except (ConfigError, ValueError, OSError, RuntimeError) as exc:
+        if started_pull and directory is not None and _rebasing(directory):
+            try:
+                action("rebase", "--abort")
+            except (OSError, RuntimeError) as abort_error:
+                note("ERROR", f"could not abort this sync rebase: {abort_error}")
+        note("ERROR", str(exc))
+        return report(1)
 
 
 # ---------------------------------------------------------------------- skills
@@ -701,16 +951,27 @@ def skill_destination(
     except ValueError as exc:
         return None, skill_check("ERROR", str(exc), name=name, project=project)
     if project is None:
-        return projection.repo / "skills" / "global" / name, None
-    if not projection.has_project(project):
-        return None, skill_check(
-            "ERROR",
-            f"{projection.projects_config_path}: key '{project}' is missing; "
-            f"add the project before {action}",
-            name=name,
-            project=project,
-        )
-    return projection.repo / "skills" / "projects" / project / name, None
+        return projection.repo / "skills" / name, None
+    from .projects import project_slug
+
+    try:
+        slug = project_slug(expand_path(project))
+    except (ValueError, gitio.GitError) as exc:
+        return None, skill_check("ERROR", str(exc), name=name, project=project)
+    return projection.repo / "projects" / slug / "skills" / name, None
+
+
+def _safe_skill_parent(repo: Path, destination: Path) -> bool:
+    try:
+        parts = destination.relative_to(repo).parts
+    except ValueError:
+        return False
+    parent = repo
+    for part in parts[:-1]:
+        parent /= part
+        if parent.is_symlink():
+            return False
+    return True
 
 
 def add_skill_report(
@@ -728,18 +989,90 @@ def add_skill_report(
         return report(rejected)
     assert destination is not None
     fields = {"name": destination.name, "project": project, "target": str(destination)}
+    if not _safe_skill_parent(projection.repo, destination):
+        return report(
+            skill_check("ERROR", "Skill destination has a symlink parent or escapes the Store", **fields)
+        )
     if destination.exists() or destination.is_symlink():
-        return report(skill_check("ERROR", f"skill already exists: {destination}", **fields))
+        return report(
+            skill_check("ERROR", f"skill already exists: {destination}", **fields)
+        )
     destination.mkdir(parents=True)
     skill_file = destination / "SKILL.md"
-    skill_file.write_text(SKILL_TEMPLATE.format(name=destination.name), encoding="utf-8")
-    return report(skill_check("ok", f"created {skill_file}", **fields))
+    skill_file.write_text(
+        SKILL_TEMPLATE.format(name=destination.name), encoding="utf-8"
+    )
+    checks = [skill_check("ok", f"created {skill_file}", **fields)]
+    if project is not None:
+        from .projects import link_project
+
+        checks.extend(link_project(projection.repo, expand_path(project)).checks)
+    return report(*checks)
+
+
+def _move_skill_preserving_links(source: Path, destination: Path) -> None:
+    """Relocate a Skill and preserve external relative link targets, with rollback."""
+    rewrites: list[tuple[Path, str, bool]] = []
+    for directory, names, files in os.walk(source, followlinks=False):
+        for name in (*names, *files):
+            link = Path(directory) / name
+            if not link.is_symlink():
+                continue
+            original = os.readlink(link)
+            if os.path.isabs(original):
+                continue
+            lexical_target = Path(os.path.abspath(link.parent / original))
+            if lexical_target.is_relative_to(source):
+                continue
+            target = link.resolve(strict=False)
+            relative = link.relative_to(source)
+            rewritten = os.path.relpath(target, (destination / relative).parent)
+            if rewritten != original:
+                rewrites.append((relative, rewritten, link.is_dir()))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    backup = Path(tempfile.mkdtemp(prefix=".agent-hub-adopt-", dir=destination.parent))
+    saved: list[tuple[Path, Path]] = []
+    moved = False
+    linked = False
+    try:
+        shutil.move(str(source), str(destination))
+        moved = True
+        for index, (relative, link_target, is_directory) in enumerate(rewrites):
+            link = destination / relative
+            original_link = backup / str(index)
+            link.rename(original_link)
+            saved.append((link, original_link))
+            link.symlink_to(link_target, target_is_directory=is_directory)
+        source.symlink_to(os.path.relpath(destination, source.parent), target_is_directory=True)
+        linked = True
+    except (OSError, RuntimeError) as exc:
+        try:
+            if linked:
+                source.unlink()
+            for link, original_link in reversed(saved):
+                if link.is_symlink() or link.exists():
+                    link.unlink()
+                original_link.rename(link)
+            if moved:
+                shutil.move(str(destination), str(source))
+            elif source.exists() and destination.exists():
+                # A cross-filesystem copy can fail before shutil.move removes source.
+                shutil.rmtree(destination)
+        except OSError as rollback_error:
+            raise OSError(
+                f"adoption failed: {exc}; rollback needs manual repair: {rollback_error}; "
+                f"original link backups are at {backup}"
+            ) from exc
+        shutil.rmtree(backup, ignore_errors=True)
+        raise
+    else:
+        shutil.rmtree(backup, ignore_errors=True)
 
 
 def adopt_skill_report(
     projection: MachineProjection,
     path_value: str,
-    project: str | None,
+    project: bool | None,
     explicit_name: str | None,
 ) -> AdoptReport:
     """Move an existing skill into the Content repository and return the structured result."""
@@ -747,42 +1080,86 @@ def adopt_skill_report(
     def report(*checks: StatusCheck) -> AdoptReport:
         return build_skill_report(AdoptReport, projection, *checks)
 
+    from . import projects
+
     source = expand_path(path_value)
+    project_path: Path | None = None
+    if project:
+        try:
+            project_path = projects.project_root(source)
+            tracked = gitio.run_git(
+                project_path,
+                "ls-files",
+                "--",
+                str(source.resolve().relative_to(project_path)),
+            )
+            if tracked.returncode:
+                raise gitio.GitCommandError(tracked.stderr.strip())
+            if tracked.stdout:
+                return report(
+                    skill_check(
+                        "ERROR",
+                        "project Skill is tracked by Git; untrack it before adoption",
+                    )
+                )
+            projects.exclude_paths(project_path, [source], dry_run=True)
+        except (ValueError, gitio.GitError) as exc:
+            return report(skill_check("ERROR", str(exc)))
+    project_name = str(project_path) if project_path is not None else None
     if source.is_symlink() or not source.exists() or not source.is_dir():
         return report(
             skill_check(
                 "ERROR",
                 f"adopt path must be an existing non-symlink directory: {source}",
-                project=project,
+                project=project_name,
             )
         )
     source = source.resolve()
     destination, rejected = skill_destination(
-        projection, explicit_name or source.name, project, "adopting a project skill"
+        projection,
+        explicit_name or source.name,
+        project_name,
+        "adopting a project skill",
     )
     if rejected is not None:
         return report(rejected)
     assert destination is not None
-    fields = {"name": destination.name, "project": project, "target": str(destination)}
+    fields = {
+        "name": destination.name,
+        "project": project_name,
+        "target": str(destination),
+    }
+    if not _safe_skill_parent(projection.repo, destination):
+        return report(
+            skill_check("ERROR", "Skill destination has a symlink parent or escapes the Store", **fields)
+        )
     if destination.exists() or destination.is_symlink():
         return report(
-            skill_check("ERROR", f"repository destination already exists: {destination}", **fields)
-        )
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(source), str(destination))
-    try:
-        source.symlink_to(destination, target_is_directory=True)
-    except OSError as exc:
-        try:
-            shutil.move(str(destination), str(source))
-        except OSError:
-            pass
-        return report(
             skill_check(
-                "ERROR", f"could not create replacement symlink at {source}: {exc}", **fields
+                "ERROR",
+                f"repository destination already exists: {destination}",
+                **fields,
             )
         )
-    return report(
-        skill_check("ok", f"adopted {source} -> {destination}", **fields),
-        skill_check("ok", "run 'hub apply' to deploy the skill to other agents", **fields),
-    )
+    if destination.is_relative_to(source):
+        return report(skill_check("ERROR", "Skill destination is inside the source directory", **fields))
+    try:
+        _move_skill_preserving_links(source, destination)
+    except (OSError, RuntimeError) as exc:
+        return report(skill_check("ERROR", f"could not adopt {source}: {exc}", **fields))
+    checks = [skill_check("ok", f"adopted {source} -> {destination}", **fields)]
+    if project_path is not None:
+        try:
+            checks.extend(projects.exclude_paths(project_path, [source]))
+            checks.extend(projects.link_project(projection.repo, project_path).checks)
+        except (ValueError, gitio.GitError) as exc:
+            checks.append(skill_check("ERROR", str(exc), **fields))
+    else:
+        checks.append(
+            skill_check(
+                "ok",
+                "run 'agent-hub apply' to deploy the skill to other agents",
+                **fields,
+            )
+        )
+    return report(*checks)

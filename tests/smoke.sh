@@ -4,376 +4,171 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf -- "$TMP"' EXIT
-
-REPO="$TMP/repo"
-FAKE_HOME="$TMP/home"
-PROJECT="$TMP/project"
-mkdir -p "$FAKE_HOME" "$PROJECT"
-cp -R "$ROOT" "$REPO"
-rm -rf -- "$REPO/.git" "$REPO/__pycache__" "$REPO/.venv" "$REPO/.pytest_cache"
-
-# macOS exposes /var as a symlink to /private/var. Canonical paths keep
-# readlink assertions independent of which spelling mktemp returned.
-REPO="$(CDPATH= cd -- "$REPO" && pwd -P)"
-FAKE_HOME="$(CDPATH= cd -- "$FAKE_HOME" && pwd -P)"
-PROJECT="$(CDPATH= cd -- "$PROJECT" && pwd -P)"
-
-export HOME="$FAKE_HOME"
-HOSTNAME="$(python3 -c 'import platform; print(platform.node())')"
-
-python3 - "$REPO" "$PROJECT" "$HOSTNAME" <<'PY'
-from pathlib import Path
-import sys
-
-repo = Path(sys.argv[1])
-project = Path(sys.argv[2])
-hostname = sys.argv[3]
-
-# The App repo carries no config/; the fixture creates the Content shape itself.
-(repo / "config").mkdir(parents=True, exist_ok=True)
-(repo / "config" / "hub.toml").write_text(
-    f'[machines]\n"{hostname}" = "testmachine"\nunused-host = "other-machine"\n',
-    encoding="utf-8",
-)
-(repo / "config" / "agents.toml").write_text(
-    """[claude]
-skills_global = "~/.claude/skills/{name}"
-skills_project = "{project_root}/.claude/skills/{name}"
-instructions_global = "~/.claude/CLAUDE.md"
-instructions_project = "{project_root}/CLAUDE.md"
-mode = "symlink"
-
-[copybot]
-skills_global = "~/copybot/skills/{name}"
-mode = "copy"
-""",
-    encoding="utf-8",
-)
-(repo / "config" / "projects.toml").write_text(
-    f'[demo]\ntestmachine = "{project}"\n\n[missing-project]\nother-machine = "~/missing"\n',
-    encoding="utf-8",
-)
-(repo / "config" / "skills.toml").write_text(
-    """[global-one]
-agents = ["claude", "copybot"]
-
-[global-current-machine]
-agents = ["claude"]
-machines = ["testmachine"]
-
-[global-other-machine]
-machines = ["other-machine"]
-
-[project-current-machine]
-machines = ["testmachine"]
-
-[project-other-machine]
-machines = ["other-machine"]
-""",
-    encoding="utf-8",
-)
-
-files = {
-    repo / "skills" / "global" / "global-one" / "SKILL.md": "# Global fixture\n",
-    repo / "skills" / "global" / "global-current-machine" / "SKILL.md": "# Current machine\n",
-    repo / "skills" / "global" / "global-other-machine" / "SKILL.md": "# Other machine\n",
-    repo / "skills" / "projects" / "demo" / "project-one" / "SKILL.md": "# Project fixture\n",
-    repo / "skills" / "projects" / "demo" / "project-current-machine" / "SKILL.md": "# Current machine\n",
-    repo / "skills" / "projects" / "demo" / "project-other-machine" / "SKILL.md": "# Other machine\n",
-    repo / "instructions" / "global" / "base.md": "Global base v1\n",
-    repo / "instructions" / "global" / "claude.md": "Claude global overlay\n",
-    repo / "instructions" / "projects" / "demo" / "base.md": "Project base v1\n",
-    repo / "instructions" / "projects" / "demo" / "claude.md": "Claude project overlay\n",
-}
-for path, content in files.items():
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-
-(Path.home() / ".claude").mkdir(parents=True, exist_ok=True)
-(Path.home() / ".claude" / "CLAUDE.md").write_bytes(
-    b"user-owned global prefix\r\n\r\n"
-    b"<!-- agent-hub:begin -->\r\n"
-    b"old managed content\r\n"
-    b"<!-- agent-hub:end -->\r\n\r\n"
-    b"user-owned global suffix\r\n"
-)
-(project / "CLAUDE.md").write_text("user-owned project text\n", encoding="utf-8")
-PY
-
-git -C "$REPO" init -q
-git -C "$REPO" config user.name "agent-hub smoke"
-git -C "$REPO" config user.email "smoke@example.invalid"
-git -C "$REPO" add -A
-git -C "$REPO" commit -qm "fixture"
-
-hub() {
-    python3 "$REPO/hub.py" --repo "$REPO" "$@"
-}
-
-HUB_OUTPUT=""
-run_hub() {
-    if HUB_OUTPUT="$(hub "$@" 2>&1)"; then
-        return 0
-    fi
-    local status=$?
-    printf '%s\n' "$HUB_OUTPUT" >&2
-    echo "COMMAND FAILED: hub $* (exit $status)" >&2
-    return "$status"
-}
-
-assert_file_contains() {
-    local file="$1"
-    local text="$2"
-    if ! grep -Fq -- "$text" "$file"; then
-        echo "ASSERTION FAILED: '$file' does not contain '$text'" >&2
-        exit 1
-    fi
-}
-
-assert_symlink_to() {
-    local link="$1"
-    local destination="$2"
-    if [[ ! -L "$link" || "$(readlink "$link")" != "$destination" ]]; then
-        echo "ASSERTION FAILED: '$link' is not a symlink to '$destination'" >&2
-        exit 1
-    fi
-}
-
-echo "== 1. apply creates links, copies, and managed blocks =="
-run_hub --dry-run apply
-test ! -e "$FAKE_HOME/.claude/skills/global-one"
-test ! -e "$PROJECT/.claude/skills/project-one"
-run_hub apply
-assert_symlink_to "$FAKE_HOME/.claude/skills/global-one" "$REPO/skills/global/global-one"
-assert_symlink_to "$PROJECT/.claude/skills/project-one" "$REPO/skills/projects/demo/project-one"
-assert_symlink_to "$FAKE_HOME/.claude/skills/global-current-machine" "$REPO/skills/global/global-current-machine"
-assert_symlink_to "$PROJECT/.claude/skills/project-current-machine" "$REPO/skills/projects/demo/project-current-machine"
-test ! -e "$FAKE_HOME/.claude/skills/global-other-machine"
-test ! -e "$PROJECT/.claude/skills/project-other-machine"
-test ! -e "$FAKE_HOME/copybot/skills/global-current-machine"
-test ! -e "$FAKE_HOME/copybot/skills/global-other-machine"
-test -f "$FAKE_HOME/copybot/skills/global-one/SKILL.md"
-test ! -L "$FAKE_HOME/copybot/skills/global-one"
-assert_file_contains "$FAKE_HOME/.claude/CLAUDE.md" "Global base v1"
-assert_file_contains "$FAKE_HOME/.claude/CLAUDE.md" "Claude global overlay"
-assert_file_contains "$PROJECT/CLAUDE.md" "user-owned project text"
-assert_file_contains "$PROJECT/CLAUDE.md" "Project base v1"
-assert_file_contains "$PROJECT/CLAUDE.md" "<!-- agent-hub:begin"
-python3 - "$FAKE_HOME/.claude/CLAUDE.md" "$PROJECT/CLAUDE.md" <<'PY'
-from pathlib import Path
-import sys
-
-expected_contents = (
-    (
-        "user-owned global prefix\r\n\r\n"
-        "<!-- agent-hub:begin -->\n"
-        "<!-- Managed by agent-hub. Edit in the content repo; local edits are overwritten. -->\n"
-        "Global base v1\n\n"
-        "Claude global overlay\n"
-        "<!-- agent-hub:end -->\r\n\r\n"
-        "user-owned global suffix\r\n"
-    ),
-    (
-        "user-owned project text\n\n"
-        "<!-- agent-hub:begin -->\n"
-        "<!-- Managed by agent-hub. Edit in the content repo; local edits are overwritten. -->\n"
-        "Project base v1\n\n"
-        "Claude project overlay\n"
-        "<!-- agent-hub:end -->\n"
-    ),
-)
-for value, expected in zip(sys.argv[1:], expected_contents, strict=True):
-    actual = Path(value).read_bytes()
-    assert actual == expected.encode(), actual.decode()
-PY
-echo "PASS"
-
-echo "== 2a. managed blocks are stable =="
-cp "$FAKE_HOME/.claude/CLAUDE.md" "$TMP/global-instructions.after-first-apply"
-cp "$PROJECT/CLAUDE.md" "$TMP/project-instructions.after-first-apply"
-run_hub status
-run_hub apply
-cmp "$TMP/global-instructions.after-first-apply" "$FAKE_HOME/.claude/CLAUDE.md"
-cmp "$TMP/project-instructions.after-first-apply" "$PROJECT/CLAUDE.md"
-echo "PASS"
-
-echo "== 2b. malformed marker pairs fail without changing the file =="
-cp "$PROJECT/CLAUDE.md" "$TMP/project-instructions.valid"
-for marker_case in missing-end orphan-end reversed duplicate-begin duplicate-end; do
-    python3 - "$PROJECT/CLAUDE.md" "$marker_case" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-marker_case = sys.argv[2]
-cases = {
-    "missing-end": "<!-- agent-hub:begin -->\nmanaged content\n",
-    "orphan-end": "managed content\n<!-- agent-hub:end -->\n",
-    "reversed": "<!-- agent-hub:end -->\nmanaged content\n<!-- agent-hub:begin -->\n",
-    "duplicate-begin": (
-        "<!-- agent-hub:begin -->\n"
-        "managed content\n"
-        "<!-- agent-hub:begin -->\n"
-        "<!-- agent-hub:end -->\n"
-    ),
-    "duplicate-end": (
-        "<!-- agent-hub:begin -->\n"
-        "managed content\n"
-        "<!-- agent-hub:end -->\n"
-        "<!-- agent-hub:end -->\n"
-    ),
-}
-path.write_text("operator prefix\n" + cases[marker_case] + "operator suffix\n", encoding="utf-8")
-PY
-    cp "$PROJECT/CLAUDE.md" "$TMP/project-instructions.malformed"
-    set +e
-    MALFORMED_STATUS_OUTPUT="$(hub status 2>&1)"
-    MALFORMED_STATUS_RC=$?
-    MALFORMED_APPLY_OUTPUT="$(hub apply 2>&1)"
-    MALFORMED_APPLY_RC=$?
-    set -e
-    test "$MALFORMED_STATUS_RC" -eq 1
-    test "$MALFORMED_APPLY_RC" -eq 1
-    grep -Fq "missing or malformed managed markers" <<<"$MALFORMED_STATUS_OUTPUT"
-    grep -Fq "malformed or duplicate managed markers" <<<"$MALFORMED_APPLY_OUTPUT"
-    cmp "$TMP/project-instructions.malformed" "$PROJECT/CLAUDE.md"
-done
-cp "$TMP/project-instructions.valid" "$PROJECT/CLAUDE.md"
-run_hub status
-echo "PASS"
-
-echo "== 2c. a regular directory replacing a link is drift =="
-rm -- "$FAKE_HOME/.claude/skills/global-one"
-mkdir -p "$FAKE_HOME/.claude/skills/global-one"
-set +e
-DRIFT_OUTPUT="$(hub status 2>&1)"
-DRIFT_RC=$?
-set -e
-test "$DRIFT_RC" -eq 1
-grep -Fq "[DRIFT]" <<<"$DRIFT_OUTPUT"
-rm -rf -- "$FAKE_HOME/.claude/skills/global-one"
-run_hub apply
-echo "PASS"
-
-echo "== 2d. apply prunes only stale repository skill symlinks =="
-mkdir -p "$TMP/external-skill"
-ln -s "$TMP/external-skill" "$FAKE_HOME/.claude/skills/foreign-skill"
-python3 - "$REPO/config/skills.toml" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-content = path.read_text(encoding="utf-8")
-content = content.replace(
-    '[global-current-machine]\nagents = ["claude"]\nmachines = ["testmachine"]',
-    '[global-current-machine]\nagents = ["claude"]\nmachines = ["other-machine"]',
-)
-path.write_text(content, encoding="utf-8")
-PY
-set +e
-PRUNE_STATUS_OUTPUT="$(hub status 2>&1)"
-PRUNE_STATUS_RC=$?
-set -e
-test "$PRUNE_STATUS_RC" -eq 1
-grep -Fq "[STALE] orphaned skill symlink" <<<"$PRUNE_STATUS_OUTPUT"
-run_hub --dry-run apply
-grep -Fq "[prune] would remove $FAKE_HOME/.claude/skills/global-current-machine" <<<"$HUB_OUTPUT"
-test -L "$FAKE_HOME/.claude/skills/global-current-machine"
-run_hub apply
-grep -Fq "[prune] remove $FAKE_HOME/.claude/skills/global-current-machine" <<<"$HUB_OUTPUT"
-test ! -L "$FAKE_HOME/.claude/skills/global-current-machine"
-test ! -e "$FAKE_HOME/.claude/skills/global-current-machine"
-assert_symlink_to "$FAKE_HOME/.claude/skills/foreign-skill" "$TMP/external-skill"
-echo "PASS"
-
-echo "== 3. changed instructions are stale and apply repairs them =="
-printf '\nGlobal base v2\n' >> "$REPO/instructions/global/base.md"
-printf 'remove me\n' > "$FAKE_HOME/copybot/skills/global-one/extra.txt"
-set +e
-STALE_OUTPUT="$(hub status 2>&1)"
-STALE_RC=$?
-set -e
-test "$STALE_RC" -eq 1
-grep -Fq "[STALE]" <<<"$STALE_OUTPUT"
-run_hub apply
-assert_file_contains "$FAKE_HOME/.claude/CLAUDE.md" "Global base v2"
-assert_file_contains "$PROJECT/CLAUDE.md" "user-owned project text"
-test ! -e "$FAKE_HOME/copybot/skills/global-one/extra.txt"
-echo "PASS"
-
-echo "== 4. adopt moves a directory and leaves a repository link =="
-mkdir -p "$FAKE_HOME/.claude/skills/adopted"
-printf '# Adopted fixture\n' > "$FAKE_HOME/.claude/skills/adopted/SKILL.md"
-run_hub adopt "$FAKE_HOME/.claude/skills/adopted"
-assert_symlink_to "$FAKE_HOME/.claude/skills/adopted" "$REPO/skills/global/adopted"
-test -f "$REPO/skills/global/adopted/SKILL.md"
-echo "PASS"
-
-echo "== 5. add-skill creates a minimal template =="
-run_hub add-skill new-skill
-assert_file_contains "$REPO/skills/global/new-skill/SKILL.md" "name: new-skill"
-assert_file_contains "$REPO/skills/global/new-skill/SKILL.md" "description:"
-
-# The skill-name rules are covered directly at the package seam by
-# tests/test_config_validation.py; this suite keeps the CLI behavior only.
-set +e
-INVALID_NAME_OUTPUT="$(hub add-skill '.hidden' 2>&1)"
-INVALID_NAME_RC=$?
-set -e
-test "$INVALID_NAME_RC" -eq 1
-grep -Fq "invalid skill name" <<<"$INVALID_NAME_OUTPUT"
-test ! -e "$REPO/skills/global/.hidden"
-echo "PASS"
-
-echo "== 6. sync without a remote commits and applies =="
-run_hub sync
-grep -Fq "no remote configured" <<<"$HUB_OUTPUT"
-test -z "$(git -C "$REPO" status --porcelain)"
-test "$(git -C "$REPO" log -1 --pretty=%s)" = "hub sync: testmachine"
-assert_symlink_to "$FAKE_HOME/.claude/skills/new-skill" "$REPO/skills/global/new-skill"
-test -f "$FAKE_HOME/copybot/skills/adopted/SKILL.md"
-run_hub status
-echo "PASS"
-
-echo "== 7. sync reloads pulled skill restrictions before apply =="
-SYNC_REMOTE="$TMP/sync-remote.git"
-SYNC_A="$TMP/sync-a"
-SYNC_B="$TMP/sync-b"
-SYNC_HOME="$TMP/sync-home"
-mkdir -p "$SYNC_HOME"
-git clone -q --bare "$REPO" "$SYNC_REMOTE"
-git clone -q "$SYNC_REMOTE" "$SYNC_A"
-git -C "$SYNC_A" config user.name "agent-hub smoke"
-git -C "$SYNC_A" config user.email "smoke@example.invalid"
-git clone -q "$SYNC_REMOTE" "$SYNC_B"
-mkdir -p "$SYNC_A/skills/global/pulled-other-machine"
-printf '# Pulled fixture\n' > "$SYNC_A/skills/global/pulled-other-machine/SKILL.md"
-cat >> "$SYNC_A/config/skills.toml" <<'EOF'
-
-[pulled-other-machine]
-machines = ["other-machine"]
+TMP="$(CDPATH= cd -- "$TMP" && pwd -P)"
+export HOME="$TMP/home"
+export PYTHONPATH="$ROOT"
+unset AGENT_HUB_STORE AGENT_HUB_REPO AGENT_HUB_MACHINE CLAUDE_CONFIG_DIR CODEX_HOME XDG_CONFIG_HOME
+unset AUTOHAND_HOME GROK_HOME HERMES_HOME VIBE_HOME
+export GIT_AUTHOR_NAME="agent-hub smoke"
+export GIT_AUTHOR_EMAIL="smoke@example.invalid"
+export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+STORE="$HOME/.agents"
+mkdir -p "$HOME/.config/agent-hub"
+printf 'first-machine\n' > "$HOME/.config/agent-hub/machine"
+mkdir -p "$STORE" "$HOME/.claude/skills/claude-local" "$HOME/.cursor/skills/cursor-local"
+printf '# Claude local\n' > "$HOME/.claude/skills/claude-local/SKILL.md"
+printf '# Cursor local\n' > "$HOME/.cursor/skills/cursor-local/SKILL.md"
+printf 'Global base\n' > "$STORE/AGENTS.md"
+cat > "$STORE/hub.toml" <<'EOF'
+[agents]
+enabled = ["claude-code", "cursor"]
 EOF
-git -C "$SYNC_A" add -A
-git -C "$SYNC_A" commit -qm "add machine-restricted skill"
-git -C "$SYNC_A" push -q
-SYNC_OUTPUT="$(HOME="$SYNC_HOME" python3 "$SYNC_B/hub.py" --repo "$SYNC_B" sync 2>&1)"
-test ! -e "$SYNC_HOME/.claude/skills/pulled-other-machine"
-grep -Fq "git pull --rebase" <<<"$SYNC_OUTPUT"
-echo "PASS"
 
-echo "== 8. unknown skill machine IDs are configuration errors =="
-cat >> "$REPO/config/skills.toml" <<'EOF'
+hub() { python3 -m agenthub.cli "$@"; }
+assert_link() {
+    python3 - "$1" "$2" <<'PY'
+import os
+from pathlib import Path
+import sys
+link, destination = map(Path, sys.argv[1:])
+assert link.is_symlink(), link
+assert link.resolve() == destination.resolve(), (link, destination)
+assert not os.path.isabs(os.readlink(link)), link
+PY
+}
 
-[invalid-machine]
-machines = ["not-configured"]
-EOF
-set +e
-INVALID_MACHINE_OUTPUT="$(hub status 2>&1)"
-INVALID_MACHINE_RC=$?
-set -e
-test "$INVALID_MACHINE_RC" -eq 2
-grep -Fq "key 'invalid-machine.machines'" <<<"$INVALID_MACHINE_OUTPUT"
-grep -Fq "unknown machine id 'not-configured'" <<<"$INVALID_MACHINE_OUTPUT"
-echo "PASS"
+echo "== init adopts Skills from two detected Agents =="
+hub init --yes
+assert_link "$HOME/.claude/skills/claude-local" "$STORE/skills/claude-local"
+assert_link "$HOME/.cursor/skills/cursor-local" "$STORE/skills/cursor-local"
+test -d "$STORE/.git"
+
+# Init does not replace Store content on a second run.
+BEFORE="$(git -C "$STORE" rev-parse HEAD)"
+hub init --yes
+test "$(git -C "$STORE" rev-parse HEAD)" = "$BEFORE"
+
+echo "== apply renders instructions and creates relative links =="
+mkdir -p "$STORE/skills/new-skill" "$STORE/agents"
+printf '# New Skill\n' > "$STORE/skills/new-skill/SKILL.md"
+printf 'Claude overlay\n' > "$STORE/agents/claude-code.md"
+printf 'My notes\n' > "$HOME/.claude/CLAUDE.md"
+hub --dry-run apply
+test ! -e "$HOME/.claude/skills/new-skill"
+hub apply
+assert_link "$HOME/.claude/skills/new-skill" "$STORE/skills/new-skill"
+assert_link "$HOME/.cursor/skills/new-skill" "$STORE/skills/new-skill"
+grep -Fq 'My notes' "$HOME/.claude/CLAUDE.md"
+grep -Fq 'Global base' "$HOME/.claude/CLAUDE.md"
+grep -Fq 'Claude overlay' "$HOME/.claude/CLAUDE.md"
+grep -Fq 'Edit ~/.agents/AGENTS.md' "$HOME/.claude/CLAUDE.md"
+cp "$HOME/.claude/CLAUDE.md" "$TMP/instructions"
+hub apply
+cmp "$HOME/.claude/CLAUDE.md" "$TMP/instructions"
+
+echo "== real directories and foreign links are preserved as drift =="
+rm "$HOME/.claude/skills/new-skill"
+mkdir -p "$HOME/.claude/skills/new-skill"
+printf 'keep\n' > "$HOME/.claude/skills/new-skill/keep.txt"
+if hub apply > "$TMP/drift" 2>&1; then exit 1; fi
+grep -Fq '[DRIFT]' "$TMP/drift"
+test "$(cat "$HOME/.claude/skills/new-skill/keep.txt")" = keep
+rm -r "$HOME/.claude/skills/new-skill"
+mkdir "$TMP/foreign"
+ln -s "$TMP/foreign" "$HOME/.claude/skills/new-skill"
+if hub apply > "$TMP/drift" 2>&1; then exit 1; fi
+grep -Fq '[DRIFT]' "$TMP/drift"
+test "$(readlink "$HOME/.claude/skills/new-skill")" = "$TMP/foreign"
+rm "$HOME/.claude/skills/new-skill"
+hub apply
+
+echo "== stale content is repaired and malformed markers stay untouched =="
+printf 'Updated instructions\n' > "$STORE/AGENTS.md"
+if hub status > "$TMP/status" 2>&1; then exit 1; fi
+grep -Fq '[STALE]' "$TMP/status"
+hub apply
+grep -Fq 'Updated instructions' "$HOME/.claude/CLAUDE.md"
+cp "$HOME/.claude/CLAUDE.md" "$TMP/valid"
+printf 'prefix <!-- agent-hub:begin -->\nold\n<!-- agent-hub:end -->\n' > "$HOME/.claude/CLAUDE.md"
+cp "$HOME/.claude/CLAUDE.md" "$TMP/malformed"
+if hub apply > "$TMP/drift" 2>&1; then exit 1; fi
+grep -Fq '[DRIFT]' "$TMP/drift"
+cmp "$HOME/.claude/CLAUDE.md" "$TMP/malformed"
+cp "$TMP/valid" "$HOME/.claude/CLAUDE.md"
+
+echo "== pruning removes only stale Store links =="
+ln -s "$TMP/foreign" "$HOME/.claude/skills/foreign"
+rm -r "$STORE/skills/new-skill"
+hub --dry-run apply
+test -L "$HOME/.claude/skills/new-skill"
+hub apply
+test ! -L "$HOME/.claude/skills/new-skill"
+test -L "$HOME/.claude/skills/foreign"
+
+echo "== add-skill and adopt use the Store skills directory =="
+hub add-skill authored
+grep -Fq 'name: authored' "$STORE/skills/authored/SKILL.md"
+mkdir -p "$HOME/local-import"
+printf '# Import\n' > "$HOME/local-import/SKILL.md"
+hub adopt "$HOME/local-import" --name imported
+assert_link "$HOME/local-import" "$STORE/skills/imported"
+hub apply
+assert_link "$HOME/.claude/skills/imported" "$STORE/skills/imported"
+
+echo "== copy mode removes extras without following target symlinks =="
+COPY_HOME="$TMP/copy-home"
+mkdir -p "$COPY_HOME/.claude" "$COPY_HOME/.cursor"
+HOME="$COPY_HOME" hub --store "$STORE" apply --copy
+test -f "$COPY_HOME/.claude/skills/imported/SKILL.md"
+test ! -L "$COPY_HOME/.claude/skills/imported"
+printf 'keep external\n' > "$TMP/foreign/keep.txt"
+ln -s "$TMP/foreign" "$COPY_HOME/.claude/skills/imported/extra"
+HOME="$COPY_HOME" hub --store "$STORE" apply --copy
+test ! -e "$COPY_HOME/.claude/skills/imported/extra"
+test "$(cat "$TMP/foreign/keep.txt")" = 'keep external'
+
+echo "== Sync shares Machine records through a bare origin =="
+ORIGIN="$TMP/origin.git"
+git init -q --bare -b main "$ORIGIN"
+git -C "$STORE" remote add origin "$ORIGIN"
+git -C "$STORE" push -q -u origin main
+hub sync
+
+echo "== A second Machine clones the Store and joins the Fleet =="
+SECOND_HOME="$TMP/second-home"
+mkdir -p "$SECOND_HOME/.config/agent-hub" "$SECOND_HOME/.claude" "$SECOND_HOME/.cursor"
+printf 'second-machine\n' > "$SECOND_HOME/.config/agent-hub/machine"
+HOME="$SECOND_HOME" hub init --from "$ORIGIN" --yes
+HOME="$SECOND_HOME" hub sync
+hub sync
+hub status --fleet --json > "$TMP/fleet.json"
+python3 - "$TMP/fleet.json" <<'PYFLEET'
+import json, sys
+rows = json.load(open(sys.argv[1]))["fleet"]
+assert {row["machine"] for row in rows} == {"first-machine", "second-machine"}, rows
+assert all(row["current"] for row in rows), rows
+PYFLEET
+
+echo "== Fleet lag counts content changes, then clears after Sync =="
+printf 'Changed on first Machine\n' > "$STORE/AGENTS.md"
+hub sync
+hub status --fleet --json > "$TMP/fleet.json"
+python3 - "$TMP/fleet.json" <<'PYFLEET'
+import json, sys
+rows = {row["machine"]: row for row in json.load(open(sys.argv[1]))["fleet"]}
+assert rows["first-machine"]["current"] is True, rows
+assert rows["first-machine"]["local"] is True, rows
+assert rows["second-machine"]["behind"] == 1, rows
+assert rows["second-machine"]["current"] is False, rows
+PYFLEET
+HOME="$SECOND_HOME" hub sync
+hub sync
+hub status --fleet --json > "$TMP/fleet.json"
+python3 - "$TMP/fleet.json" <<'PYFLEET'
+import json, sys
+assert all(row["current"] for row in json.load(open(sys.argv[1]))["fleet"])
+PYFLEET
+grep -Fq 'Changed on first Machine' "$SECOND_HOME/.claude/CLAUDE.md"
 
 echo "SMOKE TEST PASSED"

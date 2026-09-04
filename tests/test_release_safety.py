@@ -1,10 +1,9 @@
-"""Checks for public App files and Example Content."""
+"""Checks that the public App contains no private Store content."""
 
 from __future__ import annotations
 
 import re
 import subprocess
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,25 +65,5 @@ def test_tracked_app_files_contain_no_private_artifacts() -> None:
     assert not failures, "Private artifacts found:\n" + "\n".join(failures)
 
 
-def test_example_content_has_one_valid_skill_and_instruction() -> None:
-    example = ROOT / "example-content"
-    skill_files = sorted((example / "skills").glob("**/SKILL.md"))
-    instruction_files = sorted((example / "instructions").glob("**/*.md"))
-
-    assert [path.relative_to(example).as_posix() for path in skill_files] == [
-        "skills/global/example/SKILL.md"
-    ]
-    assert [path.relative_to(example).as_posix() for path in instruction_files] == [
-        "instructions/global/base.md"
-    ]
-
-    skill = skill_files[0].read_text(encoding="utf-8")
-    assert re.match(
-        r"\A---\nname: example\ndescription: .+\n---\n\n# Example\n",
-        skill,
-    )
-    assert instruction_files[0].read_text(encoding="utf-8").strip()
-
-    for config_path in sorted((example / "config").glob("*.toml")):
-        with config_path.open("rb") as handle:
-            assert isinstance(tomllib.load(handle), dict)
+def test_app_does_not_ship_a_legacy_example_store() -> None:
+    assert not (ROOT / "example-content").exists()

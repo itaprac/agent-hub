@@ -36,9 +36,14 @@ jobs:
       - name: Check syntax
         run: |
           python3 -m py_compile hub.py usage.py web.py agenthub/*.py
-          bash -n setup.sh tests/*.sh
+          bash -n tests/*.sh
           if [ -d deploy ]; then bash -n deploy/*.sh; fi
           for file in web/js/*.js; do node --check "$file"; done
+
+      - name: Check Python
+        run: |
+          ruff check agenthub tools tests
+          mypy agenthub
 
       - name: Test package
         run: python3 -m pytest
@@ -53,6 +58,3 @@ jobs:
 
       - name: Test Web API
         run: ./tests/web_smoke.sh
-
-      - name: Test federation
-        run: ./tests/smoke-peers.sh

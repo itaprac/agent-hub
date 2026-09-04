@@ -1,12 +1,12 @@
 # Network exposure (optional)
 
-The Web UI binds to `127.0.0.1:7337` and has **no general-purpose authentication**. Keep it on localhost or a trusted private network. Do not expose it to the public Internet.
+The Console binds to `127.0.0.1:7337` and has **no authentication**. Keep it on localhost or a trusted private network. Do not expose it to the public Internet.
 
-Setup never configures network exposure. Both recipes below are manual and optional.
+The App never configures network exposure. Both recipes below are manual and optional.
 
 ## Tailscale Serve
 
-Share the UI inside your tailnet only:
+Share the Console inside your tailnet only:
 
 ```bash
 tailscale serve --bg --https=8443 7337
@@ -27,6 +27,13 @@ hub.internal.example {
 
 Add authentication at the proxy (for example `basic_auth` or a forward-auth provider) if anyone other than you can reach it.
 
-## Peer traffic
+## Origin on your own Machine
 
-Machine-to-machine Peer calls authenticate with the shared token in `~/.config/agent-hub/peer-token` (mode 600). This protects the Peer API only; it does not protect the browser UI.
+Machines never talk to each other through the App. If you do not want a Git host, make an always-on Machine the Origin over SSH, for example through Tailscale:
+
+```bash
+# on the always-on machine, once
+git -C ~/.agents config receive.denyCurrentBranch updateInstead
+# on every other machine
+agent-hub init --from ssh://user@machine.tailnet.ts.net/~/.agents
+```

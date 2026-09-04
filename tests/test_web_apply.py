@@ -29,7 +29,7 @@ def test_apply_deploys_through_the_package(server: str, content: Path, home: Pat
     assert payload["exit_code"] == 0
     target = home / ".claude" / "skills" / "alpha"
     assert target.is_symlink()
-    assert target.resolve() == content / "skills" / "global" / "alpha"
+    assert target.resolve() == content / "skills" / "alpha"
     assert "link" in {line["level"] for line in payload["lines"]}
 
 
@@ -60,23 +60,14 @@ def test_drift_is_reported_with_exit_one(server: str, content: Path, home: Path)
 def test_invalid_configuration_is_one_error_line_with_exit_two(
     server: str, content: Path
 ) -> None:
-    (content / "config" / "agents.toml").write_text('[claude]\nmode = "hardlink"\n', encoding="utf-8")
+    (content / "hub.toml").write_text('[agents]\nmode = "hardlink"\n', encoding="utf-8")
     payload = post(server, "/api/run", {"command": "apply"})
     assert payload["exit_code"] == 2
     assert [line["level"] for line in payload["lines"]] == ["ERROR"]
     assert "mode" in payload["lines"][0]["text"]
 
 
-def test_local_peer_run_uses_the_same_content_operation_as_a_local_run(
-    server: str,
-    home: Path,
-) -> None:
-    payload = post(server, "/api/peers/testmachine/run", {"command": "apply"})
-    assert payload["exit_code"] == 0
-    assert (home / ".claude" / "skills" / "alpha").is_symlink()
-
-
-def test_apply_requires_a_browser_or_peer_identity(server: str, home: Path) -> None:
+def test_apply_requires_a_browser_identity(server: str, home: Path) -> None:
     with pytest.raises(urllib.error.HTTPError) as error:
         post(server, "/api/run", {"command": "apply"}, headers={"Content-Type": "application/json"})
     assert error.value.code == 401

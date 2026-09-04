@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -22,7 +22,8 @@ def test_usage_returns_finished_rollups_and_server_defaults(server: str, home: P
         json.dumps(
             {
                 "type": "assistant",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                # The report excludes its exact upper time boundary.
+                "timestamp": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
                 "sessionId": "session-1",
                 "costUSD": 1.5,
                 "message": {
@@ -61,6 +62,8 @@ def test_usage_returns_finished_rollups_and_server_defaults(server: str, home: P
     payload = get(server, "/api/usage?days=7&tz=UTC")
 
     assert payload["timeZone"] == "UTC"
+    assert "machines" not in payload
+    assert "byMachine" not in payload["rollups"]
     assert payload["settings"] == {
         "claude": True,
         "codex": True,

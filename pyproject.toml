@@ -1,31 +1,64 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-hub"
-version = "0.1.0"
-description = "Self-hosted control plane for AI coding-agent skills and instructions"
+version = "2.0.0a1"
+description = "Sync coding agent Skills and instructions through a Git Store"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
+license = "MIT"
+license-files = ["LICENSE", "THIRD-PARTY.md"]
+authors = [{name = "itaprac"}]
+keywords = ["coding-agents", "skills", "git", "sync", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/itaprac/agent-hub"
+Issues = "https://github.com/itaprac/agent-hub/issues"
+Source = "https://github.com/itaprac/agent-hub"
+Documentation = "https://github.com/itaprac/agent-hub#readme"
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.12", "mypy>=1.15", "setuptools>=77"]
 
 [project.scripts]
 agent-hub = "agenthub.cli:main"
 agent-hub-web = "agenthub.webapp:main"
 
 [tool.setuptools]
-packages = ["agenthub"]
+packages = ["agenthub", "agenthub.web_assets"]
 # hub.py and web.py stay importable as the compatibility entry points.
 py-modules = ["hub", "usage", "web"]
 
-[tool.setuptools.data-files]
-"share/agent-hub/web" = ["web/index.html", "web/style.css"]
-"share/agent-hub/web/js" = ["web/js/*.js"]
+[tool.setuptools.package-dir]
+"agenthub.web_assets" = "web"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.setuptools.package-data]
+agenthub = ["agents.json"]
+"agenthub.web_assets" = ["*.html", "*.css", "js/*.js"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+files = ["agenthub"]
