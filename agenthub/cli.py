@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import core, operations
+from . import __version__, core, operations
 from .config import ConfigError, repo_option_help, resolve_repo
 
 DESCRIPTION = "Keep Agent Skills and instructions in one Git Store."
@@ -46,6 +46,7 @@ def _options(parser: argparse.ArgumentParser, *, child: bool = False) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent-hub", description=DESCRIPTION)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     _options(parser)
     subparsers = parser.add_subparsers(dest="command", required=True)
     commands = {}
@@ -58,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("sync", "commit, pull, apply, and push"),
         ("add-skill", "create a Skill"),
         ("adopt", "move an existing Skill into the Store"),
+        ("timer", "control automatic synchronization"),
+        ("ui", "run the Console"),
     ):
         child = subparsers.add_parser(name, help=help_text)
         _options(child, child=True)
@@ -74,6 +77,10 @@ def build_parser() -> argparse.ArgumentParser:
     commands["adopt"].add_argument("--project", action="store_true")
     commands["adopt"].add_argument("--name")
     commands["migrate"].add_argument("path", type=Path)
+    commands["timer"].add_argument("action", choices=("on", "off", "status"))
+    commands["ui"].add_argument("--port", type=int, default=7337)
+    commands["ui"].add_argument("--host", default="127.0.0.1")
+    commands["ui"].add_argument("--service", choices=("on", "off", "status"))
     project_commands = commands["project"].add_subparsers(
         dest="project_command", required=True
     )
@@ -90,14 +97,36 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.dry_run and args.command not in {"apply", "sync"}:
         parser.error("--dry-run is supported only by apply and sync")
+    if args.command == "ui" and args.service is not None:
+        if args.host != "127.0.0.1" or args.port != 7337:
+            parser.error("--service uses host 127.0.0.1 and port 7337")
+    if args.command == "ui" and args.service is None and args.json:
+        parser.error("--json requires a service command")
     try:
         repo = resolve_repo(
             args.path if args.command == "migrate" else args.store,
-            create=args.command == "init",
+            create=args.command == "init"
+            or (args.command == "timer" and args.action in {"off", "status"})
+            or (args.command == "ui" and args.service in {"off", "status"}),
         )
+        if args.command == "ui" and args.service is None:
+            from . import webapp
+
+            ui_args = ["--store", str(repo), "--host", args.host, "--port", str(args.port)]
+            if args.quiet:
+                ui_args.append("--quiet")
+            return webapp.main(ui_args)
         store = operations.ContentOperations(repo)
         report: core.Report
-        if args.command == "migrate":
+        if args.command in {"timer", "ui"}:
+            from . import services
+
+            report = (
+                services.timer(args.action, repo)
+                if args.command == "timer"
+                else services.ui_service(args.service, repo)
+            )
+        elif args.command == "migrate":
             report = store.migrate()
         elif args.command == "project":
             report = store.project_link(args.path)

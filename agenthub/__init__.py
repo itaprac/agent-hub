@@ -1,3 +1,3 @@
-"""agent-hub: a self-hosted control plane for AI coding-agent skills and instructions."""
+"""Keep coding agent Skills and instructions in a shared Git Store."""
 
-__version__ = "0.1.0"
+__version__ = "2.0.0a1"
