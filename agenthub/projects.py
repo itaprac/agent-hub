@@ -192,11 +192,11 @@ def _directories(projection: config.MachineProjection, checkout: Path) -> dict[P
 
 
 def _project_checks(projection: config.MachineProjection, *, apply: bool, dry_run: bool = False) -> list[core.StatusCheck]:
-    settings = config.load_settings(projection.repo)
+    settings = projection.settings
     checks = []
     selected_agents = {agent.name for agent in projection.agents}
     for project in projection.projects:
-        if not project.available or project.path is None:
+        if not project.available:
             continue
         checkout = project.path
         try:

@@ -162,7 +162,7 @@ def test_configuration_errors_become_one_error_check_with_exit_two(content: Path
 def test_configuration_error_text_stays_on_one_line(
     content: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fail(_repo: Path) -> operations.config.MachineProjection:
+    def fail(_repo: Path, **_kwargs) -> operations.config.MachineProjection:
         raise operations.config.ConfigError("first line\nsecond line")
 
     monkeypatch.setattr(operations.config, "load_machine_projection", fail)

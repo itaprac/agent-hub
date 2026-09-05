@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from agenthub import webapp
+from conftest import write
 
 
 @pytest.mark.parametrize("method,route", [
@@ -50,9 +51,9 @@ def test_retired_peer_token_cannot_authorize_mutations(
 def test_usage_reads_only_the_local_summary_even_with_retired_peer_configuration(
     server: str, content: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (content / "config" / "peers.toml").write_text(
+    write(
+        content / "config" / "peers.toml",
         '[urls]\ntestmachine="http://local.invalid"\nremote="http://remote.invalid"\n',
-        encoding="utf-8",
     )
     calls = []
     expected = {"local-summary": True}

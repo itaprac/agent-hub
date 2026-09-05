@@ -1,17 +1,11 @@
 // Thin wrapper around the local console JSON API. Every call rejects with a readable Error.
 
-function buildHeaders(method, body) {
-  const headers = {};
-  if (body !== undefined) headers["Content-Type"] = "application/json";
-  return Object.keys(headers).length ? headers : undefined;
-}
-
 async function performRequest(method, url, body) {
   let response;
   try {
     response = await fetch(url, {
       method,
-      headers: buildHeaders(method, body),
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (error) {

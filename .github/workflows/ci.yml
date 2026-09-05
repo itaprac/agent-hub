@@ -51,6 +51,7 @@ jobs:
       - name: Test frontend state and colour schemes
         run: |
           node tests/web_state.mjs
+          node tests/web_status.mjs
           node tests/web_theme.mjs
 
       - name: Test CLI

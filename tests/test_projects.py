@@ -177,6 +177,21 @@ def test_project_filters_select_machine_and_agent_targets(content: Path, checkou
     assert (checkout / ".claude" / "skills" / "private").is_symlink()
 
 
+def test_project_links_use_the_settings_loaded_for_the_operation(content: Path, checkout: Path, project_skill: Path) -> None:
+    assert projects.link_project(content, checkout).exit_code == 0
+    projection = config.load_machine_projection(content)
+    hub = content / "hub.toml"
+    hub.write_text(hub.read_text() + '\n[skills.private]\nmachines=["other-machine"]\n')
+
+    projects.apply_links(projection)
+    for folder in (".agents", ".claude"):
+        assert (checkout / folder / "skills" / "private").resolve() == project_skill
+
+    projects.apply_links(config.load_machine_projection(content))
+    for folder in (".agents", ".claude"):
+        assert not (checkout / folder / "skills" / "private").is_symlink()
+
+
 def test_changed_origin_does_not_deploy_another_projects_skills(content: Path, checkout: Path, project_skill: Path) -> None:
     assert projects.link_project(content, checkout).exit_code == 0
     link = checkout / ".agents" / "skills" / "private"

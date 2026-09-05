@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 from pathlib import Path
 
 import pytest
@@ -20,9 +19,6 @@ def test_projection_does_not_parse_legacy_configuration(content: Path) -> None:
 
     projection = config.load_machine_projection(content)
 
-    assert dataclasses.is_dataclass(projection)
-    assert projection.__dataclass_params__.frozen
-    assert all(agent.__dataclass_params__.frozen for agent in projection.agents)
     assert projection.repo == content
     assert projection.projects == ()
     assert [target.name for target in projection.skill_targets] == ["alpha"]

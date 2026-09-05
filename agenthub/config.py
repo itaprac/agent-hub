@@ -1,4 +1,4 @@
-"""Content repository lookup, fleet configuration loading, and validation."""
+"""Store lookup, configuration validation, and resolved Agent targets."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import re
 import tomllib
 from pathlib import Path
 from typing import Any, Literal
+
+from .agents import expand_path
 
 REPO_ENV = "AGENT_HUB_STORE"
 SAFE_NAME = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
@@ -23,9 +25,8 @@ class ProjectProjection:
     """One configured project as resolved for the current Machine."""
 
     name: str
-    machines: tuple[tuple[str, str], ...]
-    path: Path | None
-    availability: Literal["available", "no_path", "missing", "not_directory"]
+    path: Path
+    availability: Literal["available", "missing", "not_directory"]
     reason: str
 
     @property
@@ -35,30 +36,15 @@ class ProjectProjection:
 
 @dataclasses.dataclass(frozen=True)
 class AgentProjection:
-    """One agent adapter with validated target templates."""
+    """One selected Agent and its target paths."""
 
     name: str
     mode: Literal["symlink", "copy"]
     skills_global: str | None
     skills_project: str | None
     instructions_global: str | None
-    instructions_project: str | None
     universal: bool = False
     detected: bool = False
-    display_name: str = ""
-
-    @property
-    def target_templates(self) -> tuple[tuple[str, str], ...]:
-        return tuple(
-            (key, value)
-            for key, value in (
-                ("instructions_global", self.instructions_global),
-                ("instructions_project", self.instructions_project),
-                ("skills_global", self.skills_global),
-                ("skills_project", self.skills_project),
-            )
-            if value is not None
-        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -94,7 +80,7 @@ class ManagedSkillDirectory:
 
 @dataclasses.dataclass(frozen=True)
 class MachineProjection:
-    """The immutable operational view of Fleet config for one Machine."""
+    """Resolved Agent targets and Store settings for one Machine."""
 
     repo: Path
     machine_id: str
@@ -104,10 +90,7 @@ class MachineProjection:
     skill_targets: tuple[SkillTarget, ...]
     instruction_targets: tuple[InstructionTarget, ...]
     managed_skill_directories: tuple[ManagedSkillDirectory, ...]
-    projects_config_path: Path
-
-    def has_project(self, name: str) -> bool:
-        return any(project.name == name for project in self.projects)
+    settings: dict[str, Any]
 
 
 def config_error(path: Path, key: str, message: str) -> ConfigError:
@@ -115,11 +98,6 @@ def config_error(path: Path, key: str, message: str) -> ConfigError:
 
 
 # ------------------------------------------------------------------ repository
-
-
-def app_root() -> Path:
-    """The App repository root: the directory that holds the entry point scripts."""
-    return Path(__file__).resolve().parents[1]
 
 
 def repo_option_help() -> str:
@@ -163,13 +141,6 @@ def load_toml(path: Path, required: bool = True) -> dict[str, Any]:
     return value
 
 
-def require_table(data: dict[str, Any], path: Path, key: str) -> dict[str, Any]:
-    value = data.get(key)
-    if not isinstance(value, dict):
-        raise config_error(path, key, "must be a table")
-    return value
-
-
 def machine_name() -> str:
     return platform.node()
 
@@ -204,12 +175,6 @@ def resolve_machine() -> tuple[str, str]:
                 f"{path}: cannot derive Machine ID; write an ID to this file"
             )
     return machine, hostname
-
-
-def expand_path(value: str) -> Path:
-    from .agents import expand_path as expand
-
-    return expand(value)
 
 
 def validate_name(name: str, label: str) -> str:
@@ -320,10 +285,8 @@ def load_machine_projection(repo: Path, *, copy: bool = False) -> MachineProject
             instructions_global=str(agent.instructions_global)
             if agent.instructions_global
             else None,
-            instructions_project=None,
             universal=agent.universal,
             detected=agent.detected,
-            display_name=agent.name,
         )
         for agent in sorted(settings["agents"].values(), key=lambda agent: agent.id)
         if (agent.id in enabled if enabled is not None else agent.detected)
@@ -385,7 +348,6 @@ def load_machine_projection(repo: Path, *, copy: bool = False) -> MachineProject
     projects = tuple(
         ProjectProjection(
             name=slug,
-            machines=(),
             path=path,
             availability="available"
             if path.is_dir()
@@ -410,5 +372,5 @@ def load_machine_projection(repo: Path, *, copy: bool = False) -> MachineProject
             ManagedSkillDirectory(path, frozenset(names))
             for path, names in sorted(managed.items())
         ),
-        Path.home() / ".config/agent-hub/projects.json",
+        settings,
     )

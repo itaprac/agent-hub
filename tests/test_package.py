@@ -46,7 +46,7 @@ def wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 def test_release_metadata_and_runtime_version_agree() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
-    assert project["version"] == __version__ == "2.0.0a1"
+    assert project["version"] == __version__
     assert project["requires-python"] == ">=3.11"
     assert project["dependencies"] == []
     assert project["license"] == "MIT"

@@ -1,4 +1,4 @@
-// Parsing and rendering for agent-hub output: dashboard, git pill and log drawer.
+// Render structured status checks and command output.
 
 import { $, $$, clear, el, formatTime } from "./dom.js";
 import { update } from "./store.js";
@@ -27,22 +27,15 @@ const ACTIONS = new Set(["link", "copy", "prune", "render", "commit", "pull", "p
 export const tone = (level) => TONES[level] || "plain";
 export const isProblem = (level) => PROBLEMS.has(level);
 
-// agent-hub prints "<agent> <scope>[/<name>]: <target>"; git and project skips
-// use their own first token. Split that into something groupable.
-export function parseLine(line) {
-  const text = line.text || "";
-  const index = text.indexOf(": ");
-  const head = index < 0 ? text : text.slice(0, index);
-  const detail = index < 0 ? "" : text.slice(index + 2);
-  const words = head.split(/\s+/).filter(Boolean);
-
-  if (!line.level) return { ...line, group: "output", label: text, detail: "" };
-  if (words[0] === "git") return { ...line, group: "git", label: "git", detail: detail || head };
-  if (words[0] === "project") {
-    return { ...line, group: "projects", label: words.slice(1).join(" ") || head, detail };
-  }
-  if (words.length > 1) return { ...line, group: words[0], label: words.slice(1).join(" "), detail };
-  return { ...line, group: words[0] || "other", label: head, detail };
+function statusRow(check) {
+  const group = check.agent || (check.project || check.kind === "project" ? "projects" : check.kind);
+  const scope = check.project ? `project ${check.project}` : check.agent ? "global" : check.kind;
+  return {
+    ...check,
+    group,
+    label: check.name ? `${scope}/${check.name}` : scope,
+    detail: check.text || check.target || "",
+  };
 }
 
 export function summarize(result) {
@@ -50,7 +43,7 @@ export function summarize(result) {
   let checks = 0;
   let problems = 0;
   let actions = 0;
-  for (const line of result?.lines || []) {
+  for (const line of result?.checks || []) {
     if (!line.level) continue;
     counts[line.level] = (counts[line.level] || 0) + 1;
     checks += 1;
@@ -156,9 +149,9 @@ function renderGroups(host, result, state, filter) {
     return;
   }
 
-  const parsed = (result.lines || []).map(parseLine).filter((line) => line.level);
+  const rows = (result.checks || []).filter((check) => check.level).map(statusRow);
   const groups = new Map();
-  for (const line of parsed) {
+  for (const line of rows) {
     if (!groups.has(line.group)) groups.set(line.group, []);
     groups.get(line.group).push(line);
   }
@@ -181,7 +174,6 @@ function renderGroups(host, result, state, filter) {
     const good = lines.filter((line) => line.level === "ok").length;
     const kind = groupKind(name, state);
 
-    // Stronger header: name + a count badge, with the quieter facts pushed right.
     const head = el("div", { class: "group-head" }, [
       el("span", { class: "group-name", text: name }),
       el("span", { class: "group-n", text: String(lines.length), title: `${lines.length} check${lines.length === 1 ? "" : "s"}` }),

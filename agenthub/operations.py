@@ -132,10 +132,6 @@ class ContentOperations:
         with _serialized():
             return gitio.state(self.repo, fetch=fetch)
 
-    def machine_id(self) -> str:
-        with _serialized():
-            return config.load_machine_projection(self.repo).machine_id
-
     def state(self) -> dict[str, Any]:
         with _serialized():
             projection = config.load_machine_projection(self.repo)
@@ -145,11 +141,10 @@ class ContentOperations:
         return self._report(
             core.ApplyReport,
             lambda projection: core.apply_report(
-                config.load_machine_projection(self.repo, copy=True)
-                if copy
-                else projection,
+                projection,
                 dry_run=dry_run,
             ),
+            copy=copy,
             dry_run=dry_run,
             report_os_errors=True,
         )
@@ -214,10 +209,11 @@ class ContentOperations:
         *,
         dry_run: bool | None = None,
         report_os_errors: bool = False,
+        copy: bool = False,
     ) -> ReportT:
         with _serialized():
             try:
-                return operation(config.load_machine_projection(self.repo))
+                return operation(config.load_machine_projection(self.repo, copy=copy))
             except config.ConfigError as exc:
                 return self._error_report(
                     report_type, str(exc), kind="config", exit_code=2, dry_run=dry_run
@@ -298,7 +294,7 @@ def _skills(
 
 def _state(projection: config.MachineProjection) -> dict[str, Any]:
     repo = projection.repo
-    settings = config.load_settings(repo)
+    settings = projection.settings
     enabled = {agent.name for agent in projection.agents}
     agents = [
         {
@@ -328,16 +324,9 @@ def _state(projection: config.MachineProjection) -> dict[str, Any]:
     projects: list[dict[str, Any]] = [
         {
             "name": project.name,
-            "path": str(project.path) if project.path is not None else None,
-            "machines": dict(project.machines),
+            "path": str(project.path),
             "available": project.available,
-            "note": (
-                ""
-                if project.available
-                else project.reason
-                if project.availability == "no_path"
-                else "path does not exist on this machine"
-            ),
+            "note": project.reason,
         }
         for project in projection.projects
     ]

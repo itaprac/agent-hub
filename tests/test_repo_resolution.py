@@ -82,5 +82,4 @@ def test_legacy_pointer_and_environment_do_not_select_the_store(
     store.mkdir()
     write(home / ".config" / "agent-hub" / "root", str(content))
     monkeypatch.setenv("AGENT_HUB_REPO", str(content))
-    monkeypatch.setattr(config, "app_root", lambda: content)
     assert config.resolve_repo() == store

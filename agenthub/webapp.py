@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
-import re
 import sys
 import traceback
 import urllib.parse
@@ -115,32 +113,21 @@ def required_name(payload: dict[str, Any], key: str) -> str:
 # --------------------------------------------------------------------------- http
 
 
-@dataclasses.dataclass(frozen=True)
-class Route:
-    method: str
-    pattern: re.Pattern[str]
-    handler: str
-
-
-def route(method: str, pattern: str, handler: str) -> Route:
-    return Route(method, re.compile(pattern), handler)
-
-
-ROUTES = (
-    route("GET", r"/api/state", "get_state"),
-    route("GET", r"/api/git", "get_git"),
-    route("GET", r"/api/fleet", "get_fleet"),
-    route("GET", r"/api/status", "get_status"),
-    route("GET", r"/api/usage", "get_usage"),
-    route("GET", r"/api/usage/settings", "get_usage_settings"),
-    route("PUT", r"/api/usage/settings", "put_usage_settings"),
-    route("GET", r"/api/file", "get_file"),
-    route("POST", r"/api/run", "post_run"),
-    route("POST", r"/api/add-skill", "post_add_skill"),
-    route("POST", r"/api/adopt", "post_adopt"),
-    route("PUT", r"/api/file", "put_file"),
-    route("DELETE", r"/api/file", "delete_file"),
-)
+ROUTES = {
+    ("GET", "/api/state"): "get_state",
+    ("GET", "/api/git"): "get_git",
+    ("GET", "/api/fleet"): "get_fleet",
+    ("GET", "/api/status"): "get_status",
+    ("GET", "/api/usage"): "get_usage",
+    ("GET", "/api/usage/settings"): "get_usage_settings",
+    ("PUT", "/api/usage/settings"): "put_usage_settings",
+    ("GET", "/api/file"): "get_file",
+    ("POST", "/api/run"): "post_run",
+    ("POST", "/api/add-skill"): "post_add_skill",
+    ("POST", "/api/adopt"): "post_adopt",
+    ("PUT", "/api/file"): "put_file",
+    ("DELETE", "/api/file"): "delete_file",
+}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -236,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
             parsed.scheme in {"http", "https"} and parsed.netloc.lower() == host.lower()
         )
 
-    def authorize_mutation(self, route: str) -> None:
+    def authorize_mutation(self) -> None:
         if self.is_same_origin_browser_request():
             return
         # The request body has not been consumed yet. Closing prevents a reverse
@@ -251,14 +238,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error_json(exc.status, exc.message)
         except content_files.FileError as exc:
             self.send_error_json(exc.status, exc.message)
+        except BrokenPipeError:
+            raise
         except (hub_config.ConfigError, OSError, UnicodeError) as exc:
             self.send_error_json(500, str(exc))
         except operations.RepositoryBusyError as exc:
             self.send_error_json(423, str(exc))
         except remote.RemoteError as exc:
             self.send_error_json(502, str(exc))
-        except BrokenPipeError:
-            raise
         except Exception:  # keep the server alive on unexpected failures
             sys.stderr.write(f"unhandled error during {method} {self.path}\n")
             traceback.print_exc(file=sys.stderr)
@@ -292,32 +279,30 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if method in {"POST", "PUT", "DELETE"}:
-            self.authorize_mutation(path)
+            self.authorize_mutation()
 
-        for item in ROUTES:
-            match = item.pattern.fullmatch(path)
-            if item.method == method and match is not None:
-                handler = getattr(self, item.handler)
-                handler(match)
-                return
-        if any(item.pattern.fullmatch(path) is not None for item in ROUTES):
+        handler = ROUTES.get((method, path))
+        if handler is not None:
+            getattr(self, handler)()
+            return
+        if any(route_path == path for _, route_path in ROUTES):
             raise ApiError(405, f"{method} is not allowed on {path}")
         raise ApiError(404, f"unknown endpoint: {path}")
 
-    def get_state(self, _match: re.Match[str]) -> None:
+    def get_state(self) -> None:
         self.send_json(operations.ContentOperations(self.repo).state())
 
-    def get_git(self, _match: re.Match[str]) -> None:
+    def get_git(self) -> None:
         fetch = (self.query().get("fetch") or ["1"])[0] != "0"
         self.send_json(git_state(self.repo, fetch=fetch))
 
-    def get_fleet(self, _match: re.Match[str]) -> None:
+    def get_fleet(self) -> None:
         self.send_json(operations.ContentOperations(self.repo).fleet())
 
-    def get_status(self, _match: re.Match[str]) -> None:
+    def get_status(self) -> None:
         self.send_json(operations.ContentOperations(self.repo).status().to_dict())
 
-    def get_usage(self, _match: re.Match[str]) -> None:
+    def get_usage(self) -> None:
         query = self.query()
         try:
             days = int((query.get("days") or ["30"])[0])
@@ -326,10 +311,10 @@ class Handler(BaseHTTPRequestHandler):
         time_zone = query["tz"][0] if query.get("tz") else None
         self.send_json(usage.read_summary(days=days, time_zone=time_zone))
 
-    def get_usage_settings(self, _match: re.Match[str]) -> None:
+    def get_usage_settings(self) -> None:
         self.send_json(usage.public_settings())
 
-    def put_usage_settings(self, _match: re.Match[str]) -> None:
+    def put_usage_settings(self) -> None:
         payload = self.read_json()
         allowed = {"claude", "codex", "grok", "cursor", "cursorToken"}
         unknown = sorted(set(payload) - allowed)
@@ -345,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(500, f"cannot save usage settings: {exc}") from exc
         self.send_json(usage.public_settings(saved))
 
-    def get_file(self, _match: re.Match[str]) -> None:
+    def get_file(self) -> None:
         values = self.query().get("path") or []
         file = operations.ContentOperations(self.repo).read_file(
             values[0] if values else None
@@ -390,7 +375,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(400, str(exc)) from exc
         return options
 
-    def post_run(self, _match: re.Match[str]) -> None:
+    def post_run(self) -> None:
         options = self._command_payload()
         self.send_json(
             run_command(
@@ -398,14 +383,14 @@ class Handler(BaseHTTPRequestHandler):
             )
         )
 
-    def post_add_skill(self, _match: re.Match[str]) -> None:
+    def post_add_skill(self) -> None:
         payload = self.read_json()
         report = operations.ContentOperations(self.repo).add_skill(
             required_name(payload, "name"), optional_name(payload, "project")
         )
         self.send_json(report.to_dict())
 
-    def post_adopt(self, _match: re.Match[str]) -> None:
+    def post_adopt(self) -> None:
         payload = self.read_json()
         project = payload.get("project", False)
         if not isinstance(project, bool):
@@ -417,7 +402,7 @@ class Handler(BaseHTTPRequestHandler):
         )
         self.send_json(report.to_dict())
 
-    def put_file(self, _match: re.Match[str]) -> None:
+    def put_file(self) -> None:
         payload = self.read_json()
         file = operations.ContentOperations(self.repo).write_file(
             payload.get("path"),
@@ -426,7 +411,7 @@ class Handler(BaseHTTPRequestHandler):
         )
         self.send_json(file, headers={"ETag": f'"{file["revision"]}"'})
 
-    def delete_file(self, _match: re.Match[str]) -> None:
+    def delete_file(self) -> None:
         if int(self.headers.get("Content-Length") or 0) > 0:
             payload = self.read_json()
             value = payload.get("path")

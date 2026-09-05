@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import platform
 import subprocess
 import sys
 import threading
@@ -79,11 +78,6 @@ def content(tmp_path: Path, home: Path, project: Path) -> Path:
     """A Store with one global Skill and one private Project skill."""
     repo = tmp_path / "content"
     write(repo / "hub.toml", HUB_TOML)
-    # Retained only for the setup and peer commands until their v2 migration.
-    write(
-        repo / "config" / "hub.toml",
-        f'[machines]\n"{platform.node()}" = "{MACHINE_ID}"\nunused-host = "other-machine"\n',
-    )
     write(repo / "skills" / "alpha" / "SKILL.md", "# alpha\n")
     write(repo / "projects" / "demo" / "skills" / "beta" / "SKILL.md", "# beta\n")
     write(repo / "AGENTS.md", "Global base\n")

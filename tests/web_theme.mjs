@@ -1,75 +1,128 @@
-// Checks the colour-scheme seam: the four schemes, the stored value, and the
-// CSS and markup that must follow them. Node only; the repo has no JS runner.
-
+// Exercise the mounted colour-scheme control with a small DOM stand-in.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { DEFAULT_THEME, THEME_KEY, THEMES, mountTheme, normalizeTheme } from "../web/js/theme.js";
 
-import { DEFAULT_THEME, THEME_ICONS, THEME_KEY, THEMES, normalizeTheme } from "../web/js/theme.js";
-
-const read = (name) => readFileSync(fileURLToPath(new URL(`../${name}`, import.meta.url)), "utf8");
-const css = read("web/style.css");
-const html = read("web/index.html");
-const app = read("web/js/app.js");
-
-console.log("== 1. four colour schemes in menu order ==");
-assert.deepEqual(THEMES, ["dark", "black", "light", "system"]);
-assert.equal(DEFAULT_THEME, "dark");
-assert.equal(THEME_KEY, "agent-hub:theme");
-console.log("PASS");
-
-console.log("== 2. unknown and missing stored values fall back to dark ==");
-for (const theme of THEMES) assert.equal(normalizeTheme(theme), theme);
+for (const theme of ["dark", "black", "light", "system"]) assert.equal(normalizeTheme(theme), theme);
 for (const value of [null, undefined, "", "amoled", "Dark", 0]) {
   assert.equal(normalizeTheme(value), "dark");
 }
-console.log("PASS");
 
-console.log("== 3. every scheme has its own icon ==");
-const icons = THEMES.map((theme) => THEME_ICONS[theme]);
-for (const icon of icons) assert.equal(typeof icon, "string");
-assert.equal(new Set(icons).size, THEMES.length);
-console.log("PASS");
-
-console.log("== 4. Black paints a pure black canvas over lighter cards ==");
-const black = css.match(/html\[data-theme="black"\]\s*\{[^}]*\}/);
-assert.ok(black, "style.css has no html[data-theme=\"black\"] block");
-const blackBlock = black[0];
-assert.match(blackBlock, /color-scheme:\s*dark/);
-for (const token of ["--bg", "--rail-bg"]) {
-  assert.match(blackBlock, new RegExp(`${token}:\\s*oklch\\(0 0 0\\)`), `${token} is not pure black`);
+// Only the DOM operations used by the picker and shared element helper.
+class TestElement extends EventTarget {
+  children = [];
+  dataset = {};
+  attributes = new Map();
+  className = "";
+  append(child) { child.parent = this; this.children.push(child); }
+  get firstChild() { return this.children[0]; }
+  removeChild(child) { this.children.splice(this.children.indexOf(child), 1); child.parent = null; }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  matches(selector) { return selector.startsWith("#") ? this.id === selector.slice(1) : this.className.split(" ").includes(selector.slice(1)); }
+  querySelectorAll(selector) { return this.children.flatMap((child) => [...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)]); }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null; }
+  closest(selector) { return this.matches(selector) ? this : this.parent?.closest(selector); }
+  contains(node) { return node === this || this.children.some((child) => child.contains(node)); }
+  focus() { document.activeElement = this; }
+  click() { this.dispatchEvent(new Event("click")); }
 }
-for (const token of ["--panel", "--card", "--card-2", "--sunken", "--log-bg"]) {
-  const declaration = blackBlock.match(new RegExp(`${token}:\\s*([^;]+);`));
-  assert.ok(declaration, `Black does not set ${token}`);
-  assert.doesNotMatch(declaration[1], /oklch\(0 0 0\)/, `${token} must lift off the canvas`);
-}
-console.log("PASS");
 
-console.log("== 5. System never resolves to Black ==");
-// Reads each at-rule to its matching brace, so a growing stylesheet cannot
-// slip a Black rule past this check.
-function block(source, start) {
-  let depth = 0;
-  for (let at = source.indexOf("{", start); at < source.length; at += 1) {
-    if (source[at] === "{") depth += 1;
-    else if (source[at] === "}" && (depth -= 1) === 0) return source.slice(start, at + 1);
+function setup(stored, blocked = false) {
+  globalThis.Node = globalThis.Element = TestElement;
+  globalThis.document = new TestElement();
+  document.createElement = () => new TestElement();
+  document.documentElement = new TestElement();
+  const picker = new TestElement();
+  picker.className = "theme-picker";
+  document.append(picker);
+  const button = new TestElement();
+  button.id = "btn-theme";
+  picker.append(button);
+  for (const id of ["theme-name", "theme-icon"]) {
+    const node = new TestElement();
+    node.id = id;
+    button.append(node);
   }
-  throw new Error("unbalanced braces in style.css");
+  const menu = new TestElement();
+  menu.id = "theme-menu";
+  menu.hidden = true;
+  picker.append(menu);
+  const storage = new Map([[THEME_KEY, stored]]);
+  globalThis.localStorage = {
+    getItem(key) { if (blocked) throw new Error("storage denied"); return storage.get(key); },
+    setItem(key, value) { if (blocked) throw new Error("storage denied"); storage.set(key, value); },
+  };
+  mountTheme();
+  const key = (value) => {
+    const event = new Event("keydown", { cancelable: true });
+    event.key = value;
+    picker.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  return { button, menu, storage, key };
 }
-const schemeQueries = [...css.matchAll(/@media\s*\(prefers-color-scheme:[^)]*\)/g)];
-assert.ok(schemeQueries.length > 0, "style.css has no prefers-color-scheme rule");
-for (const match of schemeQueries) {
-  assert.doesNotMatch(block(css, match.index), /data-theme="black"/);
+
+const { button, menu, storage, key } = setup("black");
+assert.deepEqual(menu.children.map((item) => item.dataset.theme), ["dark", "black", "light", "system"]);
+assert.equal(document.documentElement.dataset.theme, "black");
+assert.equal(button.querySelector("#theme-name").textContent, "black");
+button.click();
+assert.equal(menu.hidden, false);
+assert.equal(button.getAttribute("aria-expanded"), "true");
+assert.equal(document.activeElement, menu.children[1]);
+assert.equal(storage.get(THEME_KEY), "black");
+button.click();
+assert.equal(menu.hidden, true);
+assert.equal(document.activeElement, button);
+
+assert.equal(key("ArrowDown"), true);
+assert.equal(document.activeElement, menu.children[0]);
+key("ArrowUp");
+assert.equal(document.activeElement, menu.children[3]);
+key("ArrowDown");
+assert.equal(document.activeElement, menu.children[0]);
+key("End");
+assert.equal(document.activeElement, menu.children[3]);
+key("Home");
+assert.equal(document.activeElement, menu.children[0]);
+assert.equal(key("Escape"), true);
+assert.equal(menu.hidden, true);
+assert.equal(document.activeElement, button);
+key("ArrowUp");
+assert.equal(document.activeElement, menu.children[3]);
+
+for (const theme of THEMES) {
+  if (menu.hidden) button.click();
+  menu.children.find((item) => item.dataset.theme === theme).click();
+  assert.equal(document.documentElement.dataset.theme, theme);
+  assert.equal(storage.get(THEME_KEY), theme);
+  assert.equal(button.querySelector("#theme-name").textContent, theme);
+  assert.equal(menu.hidden, true);
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  assert.equal(document.activeElement, button);
+  assert.deepEqual(menu.children.filter((item) => item.getAttribute("aria-checked") === "true").map((item) => item.dataset.theme), [theme]);
 }
-console.log("PASS");
 
-console.log("== 6. the top bar opens a menu instead of cycling ==");
-assert.doesNotMatch(app, /cycleTheme/);
-assert.doesNotMatch(html, /click for/i);
-assert.match(html, /id="theme-menu"/);
-assert.match(html, /aria-haspopup="menu"/);
-assert.match(html, /aria-expanded="false"/);
-console.log("PASS");
+// A click on inert chrome returns focus; a focus move elsewhere keeps it there.
+button.click();
+document.dispatchEvent(new Event("pointerdown"));
+assert.equal(menu.hidden, true);
+assert.equal(document.activeElement, button);
+button.click();
+const outside = new TestElement();
+outside.focus();
+document.dispatchEvent(new Event("focusin"));
+assert.equal(menu.hidden, true);
+assert.equal(document.activeElement, outside);
 
+setup(storage.get(THEME_KEY));
+assert.equal(document.documentElement.dataset.theme, "system");
+setup("obsolete");
+assert.equal(document.documentElement.dataset.theme, DEFAULT_THEME);
+const privateMode = setup("black", true);
+assert.equal(document.documentElement.dataset.theme, DEFAULT_THEME);
+privateMode.button.click();
+privateMode.menu.children[1].click();
+assert.equal(document.documentElement.dataset.theme, "black");
+assert.equal(privateMode.menu.hidden, true);
 console.log("WEB THEME TEST PASSED");

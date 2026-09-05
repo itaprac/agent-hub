@@ -427,6 +427,7 @@ def apply_report(projection: MachineProjection, dry_run: bool = False) -> ApplyR
             kind="project",
             level="skip",
             text=f"project {project.name}: {project.reason}",
+            project=project.name,
         )
         for project in projection.projects
         if not project.available
@@ -607,6 +608,7 @@ def status_report(projection: MachineProjection) -> StatusReport:
             kind="project",
             level="skip",
             text=f"project {project.name}: {project.reason}",
+            project=project.name,
         )
         for project in projection.projects
         if not project.available
@@ -637,35 +639,6 @@ def status_report(projection: MachineProjection) -> StatusReport:
 
 
 # ------------------------------------------------------------------------ sync
-
-
-def git_action(
-    repo: Path, args: list[str], description: str
-) -> tuple[list[StatusCheck], bool]:
-    result = gitio.run_git(repo, *args)
-    # Raw git stdout keeps an empty level; both fronts render it without a prefix.
-    checks = [
-        StatusCheck(kind="git", level="", text=line, target=str(repo))
-        for line in (raw.strip() for raw in result.stdout.splitlines())
-        if line
-    ]
-    if result.returncode != 0:
-        detail = (
-            result.stderr.strip() or f"git {' '.join(args)} exited {result.returncode}"
-        )
-        checks.append(
-            StatusCheck(
-                kind="git",
-                level="ERROR",
-                text=one_line(f"{description}: {detail}"),
-                target=str(repo),
-            )
-        )
-        return checks, False
-    checks.append(
-        StatusCheck(kind="git", level="ok", text=description, target=str(repo))
-    )
-    return checks, True
 
 
 def _rebase_directory(repo: Path) -> Path:

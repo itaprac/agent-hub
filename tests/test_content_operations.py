@@ -9,6 +9,7 @@ from typing import Callable
 import pytest
 
 from agenthub import core, operations
+from conftest import MACHINE_ID
 
 
 @pytest.fixture
@@ -26,12 +27,12 @@ def test_status_returns_the_structured_report(
     assert report.problems == 2
 
 
-def test_machine_id_and_state_use_the_loaded_machine_projection(
+def test_state_reports_machine_identity_and_store_content(
     content_operations: operations.ContentOperations, content: Path
 ) -> None:
     state = content_operations.state()
 
-    assert content_operations.machine_id() == state["machine_id"]
+    assert state["machine_id"] == MACHINE_ID
     assert state["repo"] == str(content)
     assert [skill["name"] for skill in state["skills"]["global"]] == ["alpha"]
 
@@ -132,7 +133,7 @@ def test_report_operation_fails_immediately_during_contention(
     monkeypatch.setattr(
         operations.config,
         "load_machine_projection",
-        lambda repo: hold_operation(lambda: load(repo), entered, release),
+        lambda repo, **kwargs: hold_operation(lambda: load(repo, **kwargs), entered, release),
     )
     thread = threading.Thread(target=content_operations.status)
     thread.start()
@@ -240,7 +241,7 @@ def test_fleet_and_git_reads_fail_immediately_while_store_is_busy(
     monkeypatch.setattr(
         operations.config,
         "load_machine_projection",
-        lambda repo: hold_operation(lambda: load(repo), entered, release),
+        lambda repo, **kwargs: hold_operation(lambda: load(repo, **kwargs), entered, release),
     )
     thread = threading.Thread(target=content_operations.status)
     thread.start()

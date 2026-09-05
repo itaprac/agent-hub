@@ -89,10 +89,10 @@ def test_status_contention_returns_423_without_waiting(
     release = threading.Event()
     load = operations.config.load_machine_projection
 
-    def slow_load(repo: Path) -> operations.config.MachineProjection:
+    def slow_load(repo: Path, **kwargs) -> operations.config.MachineProjection:
         entered.set()
         assert release.wait(timeout=5)
-        return load(repo)
+        return load(repo, **kwargs)
 
     monkeypatch.setattr(operations.config, "load_machine_projection", slow_load)
     first = threading.Thread(target=lambda: get(server, "/api/status"))

@@ -35,11 +35,3 @@ export async function withBusy(task) {
     update({ busy: Math.max(0, store.busy - 1) });
   }
 }
-
-export function projectNames() {
-  return (store.state?.projects || []).map((project) => project.name);
-}
-
-export function agentNames() {
-  return (store.state?.agents || []).map((agent) => agent.name);
-}
