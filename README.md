@@ -48,6 +48,7 @@ Run `agent-hub timer on` on each Machine that should sync automatically. The opt
 | `agent-hub ui` | Print the local Console URL and run in the foreground. |
 | `agent-hub ui --service on\|off\|status` | Manage the optional Console user service. |
 | `agent-hub migrate PATH` | Migrate a clean v1 Content repository to the Store layout. |
+| `agent-hub remote trust --controller IP --public-key KEY` | Authorize restricted Console actions from a Tailscale controller. |
 
 Global options go first, for example `agent-hub --dry-run apply` or `agent-hub --store /path/to/store status`. `AGENT_HUB_STORE` also selects the Store. The Machine ID defaults to the short hostname; pin it in `~/.config/agent-hub/machine` if needed.
 
@@ -66,6 +67,8 @@ machines = ["workstation"]
 ```
 
 The Console edits Skills, instructions, overlays, and `hub.toml`. It shows installed Skill sources and Fleet freshness from Git records. It reads Usage only on the local Machine. It binds to `127.0.0.1:7337` and has no authentication. See [network exposure](docs/network-exposure.md) for access through a trusted private network.
+
+For Sync and Apply on another Machine from this Console, see [remote control](docs/remote-control.md).
 
 ## Development
 

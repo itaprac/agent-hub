@@ -18,6 +18,7 @@ from . import config as hub_config
 from . import files as content_files
 from . import gitio
 from . import operations
+from . import remote
 from . import skills as installed_skills
 from . import usage
 
@@ -62,7 +63,10 @@ def run_command(
     source: str | None = None,
     skill: str | None = None,
     names: list[str] | None = None,
+    machine: str | None = None,
 ) -> dict[str, Any]:
+    if machine is not None:
+        return content_operations.remote_run(machine, command, dry_run=dry_run)
     if command == "apply":
         return content_operations.apply(dry_run=dry_run).to_dict()
     if command == "sync":
@@ -251,6 +255,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error_json(500, str(exc))
         except operations.RepositoryBusyError as exc:
             self.send_error_json(423, str(exc))
+        except remote.RemoteError as exc:
+            self.send_error_json(502, str(exc))
         except BrokenPipeError:
             raise
         except Exception:  # keep the server alive on unexpected failures
@@ -366,6 +372,13 @@ class Handler(BaseHTTPRequestHandler):
         if dry_run and command not in {"apply", "sync"}:
             raise ApiError(400, "dry_run is supported only by apply and sync")
         options: dict[str, Any] = {"command": command, "dry_run": dry_run, "prefer": prefer}
+        if "machine" in payload:
+            machine = payload["machine"]
+            if not isinstance(machine, str) or not remote.MACHINE_PATTERN.fullmatch(machine):
+                raise ApiError(400, "machine must use lowercase letters, digits, and internal hyphens")
+            if command not in {"sync", "apply"} or prefer is not None:
+                raise ApiError(400, "remote commands support only Apply and Sync without prefer")
+            options["machine"] = machine
         try:
             if command == "install":
                 options["source"] = installed_skills.source_value(payload.get("source"))

@@ -70,6 +70,11 @@ _Avoid_: heartbeat, peer status, machine state
 Every Machine with a Machine record in the Store. Seen only through the Store; never contacted over the network.
 _Avoid_: cluster, peers
 
+**Remote control**:
+An optional Console action sent over SSH to a Machine configured on the controller.
+It can run Apply or Sync. Fleet status still comes from Git records, not live probes.
+See ADR 0004 for this exception to the original local-only Console.
+
 **Current**:
 A Machine whose Machine record points at, or past, the last content commit in the Store.
 _Avoid_: in sync (for one Machine), up to date
