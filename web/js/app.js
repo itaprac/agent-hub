@@ -97,7 +97,7 @@ function runFleetCommand(command, dryRun, machine) {
   const label = `${command}${dryRun ? " --dry-run" : ""} on ${target}`;
   return runHub(label, async () => {
     const result = await api.run(command, dryRun, machine);
-    return { ...result, command: label };
+    return { ...result, display_command: label };
   });
 }
 

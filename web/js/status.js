@@ -247,7 +247,7 @@ export function renderLog(result) {
     return;
   }
 
-  cmd.textContent = `agent-hub ${result.command}`;
+  cmd.textContent = `agent-hub ${result.display_command || result.command}`;
   exit.hidden = false;
   exit.textContent = `exit ${result.exit_code}`;
   exit.className = `log-exit ${result.exit_code === 0 ? "zero" : "nonzero"}`;

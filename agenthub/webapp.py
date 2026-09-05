@@ -374,8 +374,8 @@ class Handler(BaseHTTPRequestHandler):
         options: dict[str, Any] = {"command": command, "dry_run": dry_run, "prefer": prefer}
         if "machine" in payload:
             machine = payload["machine"]
-            if not isinstance(machine, str) or not machine.strip():
-                raise ApiError(400, "machine must be a non-empty Machine ID")
+            if not isinstance(machine, str) or not remote.MACHINE_PATTERN.fullmatch(machine):
+                raise ApiError(400, "machine must use lowercase letters, digits, and internal hyphens")
             if command not in {"sync", "apply"} or prefer is not None:
                 raise ApiError(400, "remote commands support only Apply and Sync without prefer")
             options["machine"] = machine

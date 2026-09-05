@@ -87,11 +87,17 @@ def test_failed_refresh_reports_remote_success_separately(server, configured, mo
 
 @pytest.mark.parametrize("body", [
     {"command": "sync", "machine": ""},
+    {"command": "sync", "machine": " "},
+    {"command": "sync", "machine": "macbook "},
+    {"command": "sync", "machine": "MacBook"},
+    {"command": "sync", "machine": "../macbook"},
+    {"command": "sync", "machine": "-macbook"},
     {"command": "sync", "machine": ["macbook"]},
     {"command": "install", "machine": "macbook", "source": "x"},
     {"command": "sync", "machine": "macbook", "prefer": "remote"},
 ])
 def test_remote_payload_rejected_before_operations(server, body, monkeypatch):
+    monkeypatch.setattr(remote, "check", lambda *a, **kw: pytest.fail("must not contact remote"))
     monkeypatch.setattr(remote, "run", lambda *a, **kw: pytest.fail("must not run"))
     with pytest.raises(urllib.error.HTTPError) as error:
         post(server, "/api/run", body)
