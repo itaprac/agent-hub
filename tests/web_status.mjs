@@ -75,7 +75,7 @@ try {
 
   renderStatusView({ ...view, status: { ...result, exit_code: 0, checks: [] } });
   assert.equal(nodes.get("#status-toolbar").hidden, true);
-  assert.equal(byClass(nodes.get("#summary"), "statusbar-verdict")[0].textContent, "Clean");
+  assert.equal(byClass(nodes.get("#summary"), "statusbar-verdict")[0].textContent, "Local files ready");
 } finally {
   if (previousDocument === undefined) delete globalThis.document; else globalThis.document = previousDocument;
   if (previousNode === undefined) delete globalThis.Node; else globalThis.Node = previousNode;

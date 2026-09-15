@@ -74,7 +74,15 @@ class ContentOperations:
             machine_id, _ = config.resolve_machine()
             machines = _fleet(self.repo, machine_id)
             targets = remote.configured_machines()
+            from . import services, sync_all
+
+            known = {row["machine"] for row in machines}
+            machines.extend({"machine": target, "local": False, "current": False}
+                            for target in sorted(targets - known - {machine_id}))
             return {
+                "automatic_sync": services.fleet_timer_enabled(self.repo),
+                "git": gitio.state(self.repo, fetch=False),
+                "last_sync": sync_all.last_result(self.repo),
                 "machine_id": machine_id,
                 "machines": [
                     {**machine, "remote_control": machine["machine"] in targets
@@ -82,6 +90,12 @@ class ContentOperations:
                     for machine in machines
                 ],
             }
+
+    def sync_all(self) -> dict[str, Any]:
+        from . import sync_all
+
+        with _serialized():
+            return sync_all.run(self.repo)
 
     def remote_run(self, machine: str, command: str, *, dry_run: bool = False) -> dict[str, Any]:
         """Run one configured Machine action, with Store sync around remote Sync."""

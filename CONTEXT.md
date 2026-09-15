@@ -72,7 +72,9 @@ _Avoid_: cluster, peers
 
 **Remote control**:
 An optional Console action sent over SSH to a Machine configured on the controller.
-It can run Apply or Sync. Fleet status still comes from Git records, not live probes.
+It can run Apply or Sync. The Console primary Sync and the Timer can synchronize
+all explicitly configured Machines. See ADR 0006. Fleet status still comes from
+Git records, not live probes.
 See ADR 0004 for this exception to the original local-only Console.
 
 **Current**:

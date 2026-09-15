@@ -14,9 +14,10 @@ def test_fleet_returns_local_identity_and_records(server, monkeypatch):
     monkeypatch.setattr(operations.fleet_records, "records", lambda repo, machine_id: records)
     with urllib.request.urlopen(f"{server}/api/fleet", timeout=5) as response:
         payload = json.loads(response.read())
-    assert payload == {"machine_id": "testmachine", "machines": [
-        {**records[0], "remote_control": False}
-    ]}
+    assert payload["machine_id"] == "testmachine"
+    assert payload["machines"] == [{**records[0], "remote_control": False}]
+    assert payload["git"]["dirty"] == 0
+    assert payload["last_sync"] is None
 
 
 @pytest.mark.parametrize("path", ["/api/fleet", "/api/git?fetch=0"])

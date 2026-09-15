@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, core, operations
+from . import __version__, core, operations, remote
 from .config import ConfigError, repo_option_help, resolve_repo
 
 DESCRIPTION = "Keep Agent Skills and instructions in one Git Store."
@@ -73,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands["init"].add_argument("--remote")
     commands["init"].add_argument("--yes", action="store_true")
     commands["apply"].add_argument("--copy", action="store_true")
+    commands["sync"].add_argument("--all-machines", action="store_true", help="sync this Machine and configured SSH targets")
     commands["sync"].add_argument("--prefer", choices=("local", "remote"))
     commands["status"].add_argument("--fleet", action="store_true")
     commands["install"].add_argument("source")
@@ -164,6 +165,17 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "status":
             report = store.status(fleet=args.fleet)
         elif args.command == "sync":
+            if args.all_machines:
+                if args.dry_run or args.prefer:
+                    parser.error("--all-machines does not support --dry-run or --prefer")
+                result = store.sync_all()
+                if args.json:
+                    print(json.dumps(result))
+                else:
+                    for line in result["lines"]:
+                        if not args.quiet or line["level"] in {"ERROR", "CONFLICT", "warn"}:
+                            print(f"[{line['level']}] {line['text']}")
+                return int(result["exit_code"])
             report = store.sync(dry_run=args.dry_run, prefer=args.prefer)
         elif args.command == "install":
             report = store.install(args.source, args.skill)
@@ -184,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 2
-    except (OSError, UnicodeError, operations.RepositoryBusyError) as exc:
+    except (OSError, UnicodeError, operations.RepositoryBusyError, remote.RemoteError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 1
 

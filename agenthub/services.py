@@ -255,7 +255,7 @@ def _launchd(
         raise ValueError(f"Store directory not found: {store}")
     executable = _executable("agent-hub" if service == "timer" else "agent-hub-web")
     arguments = (
-        [str(executable), "sync", "--quiet"]
+        [str(executable), "sync", "--quiet", "--all-machines"]
         if service == "timer"
         else [str(executable), "--host", "127.0.0.1", "--port", "7337", "--quiet"]
     )
@@ -331,7 +331,7 @@ def _unit_files(store: Path, home: Path, service: str) -> dict[str, bytes]:
     name = "sync" if service == "timer" else "web"
     executable = _executable("agent-hub" if service == "timer" else "agent-hub-web")
     arguments = (
-        [str(executable), "sync", "--quiet"]
+        [str(executable), "sync", "--quiet", "--all-machines"]
         if service == "timer"
         else [str(executable), "--host", "127.0.0.1", "--port", "7337", "--quiet"]
     )
@@ -522,3 +522,30 @@ def timer(action: str, store: Path) -> ServiceReport:
 
 def ui_service(action: str, store: Path) -> ServiceReport:
     return _service(action, store, "ui")
+
+
+def fleet_timer_enabled(store: Path) -> bool:
+    """Report whether this Store's Timer runs configured Machines as well."""
+    home = Path.home()
+    try:
+        if platform.system() == "Darwin":
+            path = home / "Library/LaunchAgents/com.agenthub.sync.plist"
+            if path.is_symlink() or not path.is_file():
+                return False
+            document = plistlib.loads(path.read_bytes())
+            if "--all-machines" not in document.get("ProgramArguments", []):
+                return False
+            if Path(document.get("WorkingDirectory", "")).resolve() != store.resolve():
+                return False
+            return _launch_state(f"gui/{os.getuid()}/com.agenthub.sync")[0]
+        if platform.system() == "Linux":
+            path = home / ".config/systemd/user/agent-hub-sync.service"
+            if not path.is_file() or path.is_symlink():
+                return False
+            text = path.read_text()
+            if '"--all-machines"' not in text or str(store) not in text:
+                return False
+            return _systemd_state("agent-hub-sync.timer").get("ActiveState") == "active"
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return False

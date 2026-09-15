@@ -213,8 +213,8 @@ resolveFleet({ machine_id: "mini", machines: [] });
 await firstFleet;
 assert.equal(snapshots.at(-1).fleetLoading, false);
 assert.equal(await isolatedFleet.run("remote-sync"), false);
-assert.deepEqual(machineState({ current: true, problems: 0 }), { tone: "ok", word: "current", rest: "0 problems" });
-assert.equal(machineState({ behind: 3, problems: 2 }).word, "behind 3");
+assert.deepEqual(machineState({ current: true, problems: 0 }), { tone: "ok", word: "Synced", rest: "" });
+assert.equal(machineState({ behind: 3, problems: 2 }).word, "Needs attention");
 assert.equal(machineState({ error: "invalid record" }).tone, "bad");
 assert.equal(recordAge(null), "not recorded");
 assert.equal(recordAge(7200), "2h ago");
@@ -285,7 +285,7 @@ const renderedText = (node) => descendants(node).map((child) => child.textConten
 const emptyFleet = { busy: 0, fleetLoading: false, fleet: { machine_id: "mini", machines: [] } };
 try {
   renderFleet(emptyFleet);
-  assert.equal(panelNodes.get("#fleet-verdict-text").textContent, "0/0 current");
+  assert.equal(panelNodes.get("#fleet-verdict-text").textContent, "1 machine waiting for sync");
   assert.match(renderedText(panelNodes.get("#fleet-grid")), /No Machine records yet. Run sync/);
   let cards = panelNodes.get("#fleet-grid").children.filter((node) => node.tag === "article");
   assert.equal(cards.length, 1);
@@ -296,8 +296,8 @@ try {
 
   const remote = { machine: "laptop", local: false, current: true, problems: 0, age_seconds: 60 };
   renderFleet({ ...emptyFleet, fleet: { machine_id: "mini", machines: [remote] } });
-  assert.equal(panelNodes.get("#fleet-verdict-text").textContent, "1/1 current");
-  assert.equal(panelNodes.get("#fleet-verdict").className, "pill pill-ok");
+  assert.equal(panelNodes.get("#fleet-verdict-text").textContent, "1 machine waiting for sync");
+  assert.equal(panelNodes.get("#fleet-verdict").className, "pill pill-idle");
   assert.doesNotMatch(renderedText(panelNodes.get("#fleet-grid")), /No Machine records yet/);
   cards = panelNodes.get("#fleet-grid").children.filter((node) => node.tag === "article");
   assert.equal(cards.length, 2);
@@ -375,3 +375,6 @@ assert.equal(staleController.view().error, null);
 assert.equal(staleController.view({ machine: "workstation" }).error, null);
 console.log("PASS");
 console.log("WEB STATE TEST PASSED");
+
+assert.equal(machineState({ current: true, problems: 0, pendingChanges: true, local: true }).word, "Local changes to sync");
+assert.equal(machineState({ current: true, problems: 0, lastOutcome: { state: "pending" } }).tone, "warn");

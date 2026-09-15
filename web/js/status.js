@@ -104,7 +104,7 @@ function renderSummary(host, result) {
 
   const { counts, checks, problems } = summarize(result);
   const clean = result.exit_code === 0 && !problems;
-  const verdict = clean ? "Clean" : problems ? `${problems} problem${problems === 1 ? "" : "s"}` : `exit ${result.exit_code}`;
+  const verdict = clean ? "Local files ready" : problems ? `${problems} problem${problems === 1 ? "" : "s"}` : `exit ${result.exit_code}`;
 
   host.className = `statusbar ${clean ? "is-ok" : "is-bad"}`;
   host.title = Object.entries(counts)

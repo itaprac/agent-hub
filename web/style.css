@@ -2113,3 +2113,20 @@ html[data-theme="light"] .usage-page {
 
 .fleet-controls { display: grid; gap: 10px; margin-top: auto; }
 .fleet-controls .switch { justify-self: start; }
+
+/* Sync is the primary action; diagnostics remain available on demand. */
+.machine-details > summary, .status-details > summary {
+  cursor: pointer;
+  padding: 12px 0;
+  color: var(--text);
+}
+.machine-details > summary:focus-visible, .status-details > summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.status-details > .statusbar {
+  margin-block: 4px 20px;
+}
+#fleet .sec-head { flex-wrap: wrap; }
+#fleet-verdict { white-space: normal; }
+.fleet-state .x { overflow-wrap: anywhere; }

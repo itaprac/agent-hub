@@ -41,6 +41,7 @@ async function refreshStatus({ log = false } = {}) {
   try {
     const result = await api.status();
     result.at = formatTime();
+    result.checked_at = new Date().toISOString();
     // The Problems filter is hidden when nothing is wrong, so drop it as well —
     // otherwise the list would stay filtered with no visible way back.
     const filter = summarize(result).problems ? store.filter : "all";
@@ -80,7 +81,10 @@ async function runHub(label, invoke) {
     }
     result.at = formatTime();
     update({ log: result });
-    if (result.exit_code === 0) {
+    if (result.command === "sync-all") {
+      toast(result.exit_code === 0 ? "All machines synced" : "Sync incomplete. Check the waiting Machines.",
+        result.exit_code === 0 ? "ok" : "err", 5000);
+    } else if (result.exit_code === 0) {
       toast(`${label} finished`, "ok", 2400);
     } else {
       const first = (result.lines || []).find((line) => ["ERROR", "DRIFT", "MISSING", "STALE", "CONFLICT"].includes(line.level));
@@ -94,7 +98,7 @@ async function runHub(label, invoke) {
 
 function runFleetCommand(command, dryRun, machine) {
   const target = machine || store.state?.machine_id || "this machine";
-  const label = `${command}${dryRun ? " --dry-run" : ""} on ${target}`;
+  const label = command === "sync-all" ? "Sync all machines" : `${command}${dryRun ? " --dry-run" : ""} on ${target}`;
   return runHub(label, async () => {
     const result = await api.run(command, dryRun, machine);
     return { ...result, display_command: label };
@@ -112,6 +116,7 @@ function currentEditor() {
 
 async function afterEdit() {
   await refreshAll();
+  await refreshFleet();
 }
 
 function paintDirty() {

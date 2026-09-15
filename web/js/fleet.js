@@ -1,6 +1,6 @@
 // Fleet reads Store records. Configured machines can receive explicit commands.
 import { api } from "./api.js";
-import { $, clear, el, formatTime } from "./dom.js";
+import { $, $$, clear, el, formatTime } from "./dom.js";
 import { store, update } from "./store.js";
 
 export function createFleetController({ request, publish = () => {}, render = () => {},
@@ -46,8 +46,8 @@ export function createFleetController({ request, publish = () => {}, render = ()
       return true;
     },
     async run(command, machine = null) {
-      if (state.running || isBusy() || !runner || !canRun(machine) || !["apply", "sync"].includes(command)) return false;
-      const dryRun = state.dryRuns.get(machine) || false;
+      if ((command === "sync-all" && machine !== null) || state.running || isBusy() || !runner || !canRun(machine) || !["apply", "sync", "sync-all"].includes(command)) return false;
+      const dryRun = command === "sync-all" ? false : state.dryRuns.get(machine) || false;
       change({ running: { command, dryRun, machine }, errors: new Map(state.errors).set(machine, null) });
       try {
         const result = await runner(command, dryRun, machine);
@@ -89,11 +89,13 @@ export function recordAge(seconds) {
 export function machineState(machine) {
   if (machine.error) return { tone: "bad", word: "record error", rest: machine.error };
   const problems = Number.isFinite(machine.problems) ? machine.problems : null;
-  const word = machine.current ? "current" : Number.isFinite(machine.behind) ? `behind ${machine.behind}` : "unknown";
+  const word = problems > 0 ? "Needs attention" : machine.pendingChanges ? (machine.local ? "Local changes to sync" : "Waiting for changes")
+    : machine.lastOutcome?.state === "pending" ? "Waiting for sync"
+    : machine.current ? "Synced" : Number.isFinite(machine.behind) ? "Needs sync" : "Sync not confirmed";
   return {
-    tone: problems > 0 ? "bad" : machine.current ? "ok" : "warn",
+    tone: problems > 0 ? "bad" : machine.pendingChanges || machine.lastOutcome?.state === "pending" ? "warn" : machine.current ? "ok" : "warn",
     word,
-    rest: problems === null ? "checks not recorded" : `${problems} problem${problems === 1 ? "" : "s"}`,
+    rest: (problems > 0 ? `${problems} problem${problems === 1 ? "" : "s"}` : ""),
   };
 }
 
@@ -102,6 +104,8 @@ function metaLine(key, value) {
     el("span", { class: "k", text: key }), el("span", { class: "v", text: value, title: value }),
   ]);
 }
+let machineDetailsOpen = false;
+
 function card(machine, view) {
   const state = machineState(machine);
   const target = machine.local ? null : machine.machine;
@@ -109,7 +113,7 @@ function card(machine, view) {
   const active = view.running?.machine === target;
   const checkboxId = machine.local ? "dry-run" : `dry-run-${machine.machine}`;
   const commands = controllable ? ["sync", "apply"].map((command) => el("button", {
-    class: `btn${command === "apply" ? " btn-primary" : ""}`,
+    class: "btn",
     disabled: view.controlsDisabled,
     title: !machine.local && command === "sync" && !view.dryRun
       ? `Publish this Store, sync on ${machine.machine}, then refresh its record`
@@ -124,7 +128,17 @@ function card(machine, view) {
       machine.local ? el("span", { class: "fleet-tag", text: "this machine" }) : null,
     ]),
     el("div", { class: `fleet-state s-${state.tone}` }, [el("em", { text: state.word }),
-      el("span", { class: "x", text: ` · ${state.rest}` })]),
+      el("span", { class: "x", text: state.rest ? ` · ${state.rest}` : "" })]),
+    machine.confirmedAt ? el("span", { class: "sec-note", text: `Confirmed ${recordAge(Math.max(0, (Date.now() - Date.parse(machine.confirmedAt)) / 1000))}` }) : null,
+    el("details", { class: "machine-details", open: machineDetailsOpen }, [
+      el("summary", { text: "Details", onClick: (event) => {
+        event.preventDefault();
+        machineDetailsOpen = !event.currentTarget.parentElement.open;
+        for (const details of $$("#fleet-grid .machine-details")) {
+          details.open = machineDetailsOpen;
+        }
+      } }),
+      machine.lastOutcome?.detail ? el("p", { class: "fleet-error", text: machine.lastOutcome.detail }) : null,
     el("div", { class: "fleet-meta" }, [
       metaLine("commit", typeof machine.head === "string" ? machine.head.slice(0, 12) : "not recorded"),
       metaLine("last sync", recordAge(machine.age_seconds)),
@@ -132,7 +146,7 @@ function card(machine, view) {
     ]),
     view.error ? el("div", { class: "fleet-error", role: "alert", text: `Last command failed: ${view.error}` }) : null,
     controllable ? el("div", { class: "fleet-controls" }, [
-      active ? el("span", { class: "sec-note", role: "status", text: `${view.running.command === "sync" ? "Sync" : "Apply"} on ${machine.machine}…` }) : null,
+      active ? el("span", { class: "sec-note", role: "status", text: `${view.running.command === "apply" ? "Apply" : "Sync"} on ${machine.machine}…` }) : null,
       el("label", { class: "switch", title: `Run Apply and Sync with --dry-run on ${machine.machine}` }, [
         el("input", { type: "checkbox", id: checkboxId, checked: view.dryRun, disabled: view.controlsDisabled,
           onChange: (event) => {
@@ -146,6 +160,7 @@ function card(machine, view) {
       ]),
       el("div", { class: "fleet-actions" }, commands),
     ]) : el("p", { class: "sec-note", text: "Remote control is not configured." }),
+    ]),
   ]);
 }
 
@@ -154,19 +169,40 @@ export function renderFleet(snapshot) {
   if (!panel) return;
   panel.classList.toggle("is-loading", Boolean(snapshot.fleetLoading));
   const records = snapshot.fleet?.machines || [];
-  const machines = [...records];
+  const git = snapshot.fleet?.git;
+  const pendingChanges = Boolean(git?.dirty || git?.ahead || git?.behind);
+  const last = snapshot.fleet?.last_sync;
+  const machines = records.map((record) => {
+    const outcome = last?.machines?.[record.machine];
+    const resolvedLater = record.current && !record.problems && record.synced_at > last?.at;
+    const localProblems = record.local && snapshot.status && (!last || snapshot.status.checked_at > last.at) ? (snapshot.status.checks || []).filter(
+      (check) => ["DRIFT", "MISSING", "STALE", "ERROR", "CONFLICT"].includes(check.level)).length : record.problems;
+    const confirmedAt = !resolvedLater && outcome?.state === "synced" ? last.at : record.synced_at;
+    return { ...record, problems: localProblems, pendingChanges, confirmedAt, lastOutcome: resolvedLater ? null : outcome };
+  });
   const localId = snapshot.fleet?.machine_id || snapshot.state?.machine_id;
   if (localId && !machines.some((machine) => machine.local)) {
-    machines.unshift({ machine: localId, local: true });
+    machines.unshift({ machine: localId, local: true, pendingChanges });
   }
-  const current = records.filter((machine) => machine.current).length;
-  const hasProblems = records.some((machine) => machine.error || machine.problems > 0);
-  const tone = snapshot.fleetError || hasProblems ? "bad" : records.length && current === records.length ? "ok" : "idle";
+  const waiting = machines.filter((machine) => machineState(machine).tone !== "ok");
+  const running = controller.view().running;
+  const problem = snapshot.fleetError || machines.some((machine) => machine.error || machine.problems > 0);
+  const unverified = !git?.remote || !records.length;
+  const verdict = running ? "Syncing machines…" : problem ? "Sync needs attention"
+    : pendingChanges ? "Changes need syncing" : waiting.length ? `${waiting.length} machine${waiting.length === 1 ? "" : "s"} waiting for sync`
+    : unverified ? "Sync not confirmed" : "All machines synced";
   const pill = $("#fleet-verdict");
-  pill.className = `pill pill-${tone}`;
-  pill.title = "Recorded Store revisions; these cards do not query other machines";
-  $("#fleet-verdict-text").textContent = snapshot.fleetLoading ? "Loading" : `${current}/${records.length} current`;
-  $("#fleet-meta").textContent = snapshot.fleetLoading ? "loading…" : snapshot.fleet?.at || "";
+  pill.className = `pill pill-${problem ? "bad" : waiting.length || pendingChanges || unverified ? "idle" : "ok"}`;
+  pill.title = "Latest known Machine records";
+  pill.setAttribute("role", "status");
+  $("#fleet-verdict-text").textContent = verdict;
+  $("#fleet-meta").textContent = snapshot.fleet?.automatic_sync ? "Automatic sync every 10 min" : "Automatic sync is off";
+  const sync = $("#sync-all");
+  if (sync) {
+    sync.disabled = controller.view({ busy: snapshot.busy }).controlsDisabled;
+    sync.textContent = running ? "Syncing…" : "Sync";
+    sync.onclick = () => controller.run("sync-all");
+  }
   const grid = clear($("#fleet-grid"));
   if (snapshot.fleetError) grid.append(el("div", {
     class: "fleet-error fleet-error-block", role: "alert", text: `Fleet unavailable: ${snapshot.fleetError}`,

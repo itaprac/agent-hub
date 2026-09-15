@@ -68,3 +68,19 @@ Remote buttons do not offer `--prefer` or arbitrary shell commands.
 To revoke access, remove the line marked `agent-hub:` for this key from the
 target's `~/.ssh/authorized_keys`, then remove its controller config entry.
 If an App or Python update changes the executable paths, revoke and pair again.
+
+## Sync all configured Machines
+
+Use the main **Sync** button on Status to sync this Machine and every configured
+SSH target. The controller publishes first, then syncs targets and collects their
+changes. Each Machine shows whether sync completed or is still pending. Apply,
+per-Machine Sync, and dry-run remain under **Details**.
+
+The Timer now runs the same operation every ten minutes. Run `agent-hub timer on`
+once on an existing controller to update its Timer command. A sleeping target
+is tried again on the next scheduled run. The controller must be running and
+able to reach both the Origin and the target. Conflicts require resolution;
+a scheduled run does not discard either side's edits.
+
+From the CLI, use `agent-hub sync --all-machines`. Plain `agent-hub sync` still
+operates on one Machine. Aggregate Sync does not support dry-run or `--prefer`.

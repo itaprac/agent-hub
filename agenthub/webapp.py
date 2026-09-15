@@ -21,7 +21,7 @@ from . import skills as installed_skills
 from . import usage
 
 MAX_BODY_BYTES = content_files.MAX_FILE_BYTES + 64 * 1024
-RUN_COMMANDS = frozenset({"apply", "sync", "install", "update"})
+RUN_COMMANDS = frozenset({"apply", "sync", "sync-all", "install", "update"})
 
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -65,6 +65,8 @@ def run_command(
 ) -> dict[str, Any]:
     if machine is not None:
         return content_operations.remote_run(machine, command, dry_run=dry_run)
+    if command == "sync-all":
+        return content_operations.sync_all()
     if command == "apply":
         return content_operations.apply(dry_run=dry_run).to_dict()
     if command == "sync":

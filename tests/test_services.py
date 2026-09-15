@@ -107,6 +107,7 @@ def test_launchd_timer_plist_uses_resolved_commands_and_store_environment(
         str(binary / "agent-hub"),
         "sync",
         "--quiet",
+        "--all-machines",
     ]
     assert document["StartInterval"] == 600
     assert document["RunAtLoad"] is False
@@ -119,6 +120,8 @@ def test_launchd_timer_plist_uses_resolved_commands_and_store_environment(
         home / "Library/Logs/agent-hub-sync.error.log"
     )
     assert manager.calls[-1] == ["launchctl", "bootstrap", "gui/501", str(plist)]
+    assert services.fleet_timer_enabled(content) is True
+    assert services.fleet_timer_enabled(content / "other") is False
 
 
 def test_launchd_on_off_and_status_are_idempotent(content, home, manager):
@@ -260,7 +263,7 @@ def test_systemd_timer_files_and_commands(content, home, manager, monkeypatch):
     service = (directory / "agent-hub-sync.service").read_text()
     timer = (directory / "agent-hub-sync.timer").read_text()
     assert "Type=oneshot" in service
-    assert '"sync" "--quiet"' in service
+    assert '"sync" "--quiet" "--all-machines"' in service
     assert "OnActiveSec=600\nOnUnitActiveSec=600" in timer
     assert "Unit=agent-hub-sync.service" in timer
     assert 'Environment="AGENT_HUB_STORE=' + str(content) + '"' in service
