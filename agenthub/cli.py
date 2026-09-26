@@ -65,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("timer", "control automatic synchronization"),
         ("ui", "run the Console"),
         ("remote", "pair this Machine for remote Console actions"),
+        ("usage", "read local transcript usage as JSON for a controller"),
     ):
         child = subparsers.add_parser(name, help=help_text)
         _options(child, child=True)
@@ -76,6 +77,8 @@ def build_parser() -> argparse.ArgumentParser:
     commands["sync"].add_argument("--all-machines", action="store_true", help="sync this Machine and configured SSH targets")
     commands["sync"].add_argument("--prefer", choices=("local", "remote"))
     commands["status"].add_argument("--fleet", action="store_true")
+    commands["usage"].add_argument("--days", type=int, choices=(1, 7, 30, 90), default=30)
+    commands["usage"].add_argument("--time-zone", default="UTC")
     commands["install"].add_argument("source")
     commands["install"].add_argument("--skill")
     commands["update"].add_argument("names", nargs="*")
@@ -90,12 +93,13 @@ def build_parser() -> argparse.ArgumentParser:
     commands["ui"].add_argument("--host", default="127.0.0.1")
     commands["ui"].add_argument("--service", choices=("on", "off", "status"))
     remote_commands = commands["remote"].add_subparsers(dest="remote_command", required=True)
-    trust = remote_commands.add_parser("trust", help="allow a controller key to run Status, Apply, and Sync")
+    trust = remote_commands.add_parser("trust", help="allow a controller key to run Status, Usage, Apply, and Sync")
     _options(trust, child=True)
     trust.add_argument("--public-key", required=True)
     trust.add_argument("--controller", required=True, help="controller Tailscale IP address")
     trust.add_argument("--executable", type=Path, default=Path(sys.argv[0]).absolute())
     trust.add_argument("--github-origin", action="store_true", help="set up a repository-scoped GitHub key for background Sync")
+    trust.add_argument("--refresh", action="store_true", help="back up and replace an existing command wrapper")
     project_commands = commands["project"].add_subparsers(
         dest="project_command", required=True
     )
@@ -132,6 +136,21 @@ def main(argv: list[str] | None = None) -> int:
                 ui_args.append("--quiet")
             return webapp.main(ui_args)
         store = operations.ContentOperations(repo)
+        if args.command == "usage":
+            from . import usage, config
+
+            machine, hostname = config.resolve_machine()
+            # A remote read includes all local transcript sources. Cursor is an
+            # account API and must be fetched only once, on the controller.
+            summary = usage.read_summary(args.days, args.time_zone, {
+                "claude": True, "codex": True, "grok": True, "cursor": False,
+            }, wait_for_rates=True)
+            print(json.dumps({
+                "command": "usage", "machine_id": machine, "hostname": hostname,
+                "repo": str(repo), "exit_code": 0, "problems": 0,
+                "lines": [], "checks": [], "usage": summary,
+            }))
+            return 0
         report: core.Report
         if args.command in {"timer", "ui"}:
             from . import services
@@ -146,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "remote":
             from . import pairing
 
-            report = pairing.trust(args.public_key, args.controller, repo, args.executable)
+            report = pairing.trust(args.public_key, args.controller, repo, args.executable, refresh=args.refresh)
             if args.github_origin and report.exit_code == 0:
                 from . import origin_auth
 

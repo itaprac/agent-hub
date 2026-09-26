@@ -15,10 +15,13 @@ from typing import Any
 from . import config as hub_config
 from . import files as content_files
 from . import gitio
+from . import hubconfig
+from . import lifecycle
 from . import operations
 from . import remote
 from . import skills as installed_skills
 from . import usage
+from . import usage_fleet
 
 MAX_BODY_BYTES = content_files.MAX_FILE_BYTES + 64 * 1024
 RUN_COMMANDS = frozenset({"apply", "sync", "sync-all", "install", "update"})
@@ -127,6 +130,10 @@ ROUTES = {
     ("POST", "/api/run"): "post_run",
     ("POST", "/api/add-skill"): "post_add_skill",
     ("POST", "/api/adopt"): "post_adopt",
+    ("POST", "/api/skill"): "post_skill",
+    ("POST", "/api/instruction"): "post_instruction",
+    ("POST", "/api/backup"): "post_backup",
+    ("POST", "/api/config"): "post_config",
     ("PUT", "/api/file"): "put_file",
     ("DELETE", "/api/file"): "delete_file",
 }
@@ -240,6 +247,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error_json(exc.status, exc.message)
         except content_files.FileError as exc:
             self.send_error_json(exc.status, exc.message)
+        except (lifecycle.LifecycleError, hubconfig.HubConfigError) as exc:
+            self.send_error_json(exc.status, exc.message)
         except BrokenPipeError:
             raise
         except (hub_config.ConfigError, OSError, UnicodeError) as exc:
@@ -311,7 +320,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             days = 30
         time_zone = query["tz"][0] if query.get("tz") else None
-        self.send_json(usage.read_summary(days=days, time_zone=time_zone))
+        self.send_json(usage_fleet.read_summary(days=days, time_zone=time_zone))
 
     def get_usage_settings(self) -> None:
         self.send_json(usage.public_settings())
@@ -402,6 +411,48 @@ class Handler(BaseHTTPRequestHandler):
             project,
             optional_name(payload, "name"),
         )
+        self.send_json(report.to_dict())
+
+    def post_skill(self) -> None:
+        payload = self.read_json()
+        report = operations.ContentOperations(self.repo).skill_action(
+            payload.get("action"), payload.get("name"), payload.get("project")
+        )
+        self.send_json(report.to_dict())
+
+    def post_instruction(self) -> None:
+        payload = self.read_json()
+        report = operations.ContentOperations(self.repo).instruction_action(
+            payload.get("action"), payload.get("path")
+        )
+        self.send_json(report.to_dict())
+
+    def post_backup(self) -> None:
+        payload = self.read_json()
+        action = payload.get("action")
+        revision = expected_revision(payload) if action == "restore" else None
+        self.send_json(
+            operations.ContentOperations(self.repo).backup_action(
+                action,
+                payload.get("path"),
+                backup_id=payload.get("id"),
+                label=payload.get("label"),
+                revision=revision,
+            )
+        )
+
+    def post_config(self) -> None:
+        payload = self.read_json()
+        content = operations.ContentOperations(self.repo)
+        action = payload.get("action")
+        if action == "skill-targets":
+            report = content.skill_targets(
+                payload.get("name"), payload.get("machines"), payload.get("agents")
+            )
+        elif action == "agents":
+            report = content.agent_settings(payload.get("enabled"), payload.get("mode"))
+        else:
+            raise ApiError(400, "action must be skill-targets or agents")
         self.send_json(report.to_dict())
 
     def put_file(self) -> None:

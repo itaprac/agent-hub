@@ -38,6 +38,14 @@ _Avoid_: project config, local skill
 The stable name derived from a project's origin URL. Identifies a project across Machines without a path table.
 _Avoid_: project ID, project path
 
+**Disabled item**:
+A Skill, `AGENTS.md`, or Overlay moved to the same path under `disabled/` in the Store. Apply does not deploy it; Enable moves it back. See ADR 0007.
+_Avoid_: archived, hidden, inactive
+
+**Backup**:
+A copy of one Store file under `backups/<path>/`, made by the operator before an edit. Restore writes it back and applies it.
+_Avoid_: snapshot, version
+
 ### Agents
 
 **Agent**:

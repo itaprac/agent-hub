@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
 
-from . import config, core, files, gitio, skills as installed_skills
+from . import config, core, files, gitio, hubconfig, lifecycle, skills as installed_skills
 from . import fleet as fleet_records
 from . import remote
 
@@ -202,6 +202,46 @@ class ContentOperations:
             report_os_errors=True,
         )
 
+    def skill_action(
+        self, action: str, name: Any, project: Any = None
+    ) -> lifecycle.LifecycleReport:
+        with _serialized():
+            projection = config.load_machine_projection(self.repo)
+            return lifecycle.skill(projection, action, name, project)
+
+    def instruction_action(self, action: str, path: Any) -> lifecycle.LifecycleReport:
+        with _serialized():
+            projection = config.load_machine_projection(self.repo)
+            return lifecycle.instruction(projection, action, path)
+
+    def backup_action(
+        self,
+        action: str,
+        path: Any,
+        *,
+        backup_id: Any = None,
+        label: Any = None,
+        revision: str | None = None,
+    ) -> dict[str, Any]:
+        with _serialized():
+            projection = config.load_machine_projection(self.repo)
+            return lifecycle.backup(
+                projection, action, path,
+                backup_id=backup_id, label=label, revision=revision,
+            )
+
+    def skill_targets(
+        self, name: Any, machines: Any, agents: Any
+    ) -> lifecycle.LifecycleReport:
+        with _serialized():
+            projection = config.load_machine_projection(self.repo)
+            return hubconfig.set_skill_targets(projection, name, machines, agents)
+
+    def agent_settings(self, enabled: Any, mode: Any) -> lifecycle.LifecycleReport:
+        with _serialized():
+            projection = config.load_machine_projection(self.repo)
+            return hubconfig.set_agents(projection, enabled, mode)
+
     def read_file(self, path: Any) -> dict[str, Any]:
         with _serialized():
             return files.read(self.repo, path)
@@ -274,6 +314,27 @@ def _relative(path: Path, repo: Path) -> str:
         return str(path)
 
 
+def _scope_skills(
+    relative: Path, repo: Path, warnings: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Enabled and disabled Skills of one scope, in canonical name order."""
+    locks = relative == Path("skills")
+    result = []
+    for base, disabled in ((repo, False), (repo / lifecycle.DISABLED, True)):
+        provenance: dict[str, dict[str, str | None]] = {}
+        if locks and (base / lifecycle.LOCKFILE).exists():
+            try:
+                provenance = installed_skills.read_provenance(base)
+            except ValueError as exc:
+                if warnings is not None:
+                    warnings.append(str(exc))
+        result.extend(
+            {**skill, "disabled": disabled}
+            for skill in _skills(base / relative, repo, provenance)
+        )
+    return sorted(result, key=lambda skill: skill["name"].lower())
+
+
 def _skills(
     parent: Path, repo: Path,
     provenance: dict[str, dict[str, str | None]] | None = None,
@@ -329,12 +390,7 @@ def _state(projection: config.MachineProjection) -> dict[str, Any]:
         }
         for agent in sorted(settings["agents"].values(), key=lambda item: item.id)
     ]
-    warnings = []
-    try:
-        provenance = installed_skills.read_provenance(repo)
-    except ValueError as exc:
-        provenance = {}
-        warnings.append(str(exc))
+    warnings: list[str] = []
     projects: list[dict[str, Any]] = [
         {
             "name": project.name,
@@ -344,8 +400,24 @@ def _state(projection: config.MachineProjection) -> dict[str, Any]:
         }
         for project in projection.projects
     ]
-    instruction_paths = [repo / "AGENTS.md"]
-    instruction_paths.extend(sorted((repo / "agents").glob("*.md")))
+    disabled_root = repo / lifecycle.DISABLED
+    overlays = sorted(
+        {path.name for path in (repo / "agents").glob("*.md")}
+        | {path.name for path in (disabled_root / "agents").glob("*.md")}
+    )
+    instruction_paths = [Path("AGENTS.md"), *(Path("agents", name) for name in overlays)]
+
+    def instruction_entry(relative: Path) -> dict[str, Any]:
+        disabled = not (repo / relative).is_file() and (disabled_root / relative).is_file()
+        path = disabled_root / relative if disabled else repo / relative
+        return {
+            "name": relative.name,
+            "path": _relative(path, repo),
+            "source": relative.as_posix(),
+            "exists": path.is_file(),
+            "disabled": disabled,
+            "kind": "base" if relative.name == "AGENTS.md" else "agent",
+        }
     return {
         "machine_id": projection.machine_id,
         "hostname": projection.hostname,
@@ -356,24 +428,23 @@ def _state(projection: config.MachineProjection) -> dict[str, Any]:
         "agents": agents,
         "projects": projects,
         "skills": {
-            "global": _skills(repo / "skills", repo, provenance),
+            "global": _scope_skills(Path("skills"), repo, warnings),
             "projects": {
-                project.name: _skills(repo / "projects" / project.name / "skills", repo)
+                project.name: _scope_skills(Path("projects", project.name, "skills"), repo)
                 for project in projection.projects
             },
         },
         "instructions": {
-            "global": [
-                {
-                    "name": path.name,
-                    "path": _relative(path, repo),
-                    "exists": path.is_file(),
-                    "kind": "base" if path.name == "AGENTS.md" else "agent",
-                }
-                for path in instruction_paths
-            ],
+            "global": [instruction_entry(path) for path in instruction_paths],
             "projects": {},
         },
+        "backups": lifecycle.backups(repo),
+        "hub": {
+            "enabled": settings["enabled"],
+            "mode": settings["mode"],
+            "skills": settings["skills"],
+        },
+        "machines": hubconfig.machines(repo, projection.machine_id),
         "config_files": [
             {
                 "name": "hub.toml",

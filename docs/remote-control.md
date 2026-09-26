@@ -19,7 +19,7 @@ agent-hub remote trust --controller CONTROLLER_TAILSCALE_IP --public-key 'ssh-ed
 ```
 
 This backs up existing SSH keys and adds a restricted authorization. It permits
-only Status, Apply, and Sync on the selected Store, from that controller's
+only Status, Usage, Apply, and Sync on the selected Store, from that controller's
 Tailscale address. Other SSH keys remain intact. Use `--store` for a custom
 Store and `--executable` for a different agent-hub entry point.
 
@@ -68,6 +68,38 @@ Remote buttons do not offer `--prefer` or arbitrary shell commands.
 To revoke access, remove the line marked `agent-hub:` for this key from the
 target's `~/.ssh/authorized_keys`, then remove its controller config entry.
 If an App or Python update changes the executable paths, revoke and pair again.
+
+## Combine Usage from Machines
+
+Usage adds local Transcripts from the Machines in the controller's
+`remotes.json`. Each Machine needs this version of the CLI. The controller's
+Usage source switches apply to all Machines. Cursor account events are fetched
+once on the controller. Do not copy Transcripts between Machines: copied
+activity can count twice.
+
+To enable read-only Usage on an existing pairing, update the target CLI and
+run this on the target with the same controller address and public key:
+
+```sh
+agent-hub remote trust --refresh --controller CONTROLLER_TAILSCALE_IP --public-key 'ssh-ed25519 PUBLIC_KEY'
+```
+
+This backs up and updates the restricted command wrapper. It preserves the
+other SSH authorizations. The wrapper accepts Usage reads for 1, 7, 30, or 90
+days with a valid time zone. It does not permit remote installations or shell
+commands. For a direct check on the target:
+
+```sh
+agent-hub usage --json --days 30 --time-zone Europe/Warsaw
+```
+
+The Console lists included Machines and their totals. If a read fails, it names
+the missing Machine and marks the totals as partial. Reads time out after 30
+seconds; results are cached in memory for 60 seconds. Refresh the Usage page
+after updating a pairing and allow the cache to expire.
+
+Costs are API estimates, not subscription bills. Each Machine uses its local
+rate table, and the available Transcript history determines the totals.
 
 ## Sync all configured Machines
 

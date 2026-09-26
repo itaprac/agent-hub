@@ -27,6 +27,8 @@ This spec replaces the v1 `SPEC.md`, `SPEC-PEERS.md`, and `SPEC-WEB.md`. Vocabul
   projects/<slug>/skills/<name>/ # private Project skills, optional
   machines/<machine-id>.json    # Machine record, written by Sync
   hub.toml                      # optional filters and custom Agents
+  disabled/...                  # disabled Skills and instructions, same layout; optional
+  backups/<path>/<time>.md      # operator backups of Store files; optional
   .gitignore                    # created by init
 ```
 
@@ -180,7 +182,11 @@ The v1 Web UI minus federation. `agenthub.webapp` serves `web/` and a JSON API; 
 | `GET /api/fleet` | Every Machine record with current or behind and `synced_at` age |
 | `POST /api/run {command, dry_run}` | `apply`, `sync`, `install {source, skill?}`, `update {names?}`; structured report |
 | `POST /api/add-skill`, `POST /api/adopt` | As the CLI |
-| `GET/PUT/DELETE /api/file` | Text files under `skills/**`, `AGENTS.md`, `agents/*.md`, `projects/**`, `hub.toml`; revision check with 428 and 409; `hub.toml` parsed before write, 422 on error; 1 MB limit; traversal rejected |
+| `POST /api/skill {action, name, project?}` | `disable`, `enable`, or `delete` one Skill, then Apply; structured report |
+| `POST /api/instruction {action, path}` | `disable` or `enable` `AGENTS.md` or an Overlay, then Apply; structured report |
+| `POST /api/backup {action, path, id?, label?, revision?}` | `create`, `restore` (revision checked, then Apply), or `delete` a Backup |
+| `POST /api/config {action, ...}` | `skill-targets {name, machines?, agents?}` sets or clears `[skills.<name>]`; `agents {enabled?, mode}` sets `[agents]`. Only that table or those keys change; the result must parse to the old data plus the change, else 422. Then Apply |
+| `GET/PUT/DELETE /api/file` | Text files under `skills/**`, `AGENTS.md`, `agents/*.md`, `projects/**`, the same paths under `disabled/`, `backups/**`, and `hub.toml`; revision check with 428 and 409; `hub.toml` parsed before write, 422 on error; 1 MB limit; traversal rejected |
 
 Frontend sections: top bar with Refresh and colour scheme; Fleet panel with one card per Machine record (no buttons on remote cards); local status bar and checks; Skills tree with editor, New, Adopt, and Install; Instructions editor for `AGENTS.md` and Overlays; Config editor for `hub.toml`. `DESIGN.md` governs appearance.
 

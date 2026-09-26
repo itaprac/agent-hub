@@ -165,11 +165,14 @@ def _validate_report(
 
 
 def _invoke(
-    target: RemoteTarget, machine: str, command: str, dry_run: bool = False
+    target: RemoteTarget, machine: str, command: str, dry_run: bool = False,
+    *, usage_options: tuple[int, str] | None = None,
 ) -> dict[str, Any]:
     remote_args = [target.executable, "--store", target.store, command, "--json"]
     if dry_run:
         remote_args.append("--dry-run")
+    if usage_options is not None:
+        remote_args.extend(["--days", str(usage_options[0]), "--time-zone", usage_options[1]])
     args = [
         "ssh",
         "-T",
@@ -195,9 +198,11 @@ def _invoke(
             stderr=subprocess.PIPE,
             text=True,
             check=False,
-            timeout=SSH_TIMEOUT,
+            timeout=30 if usage_options is not None else SSH_TIMEOUT,
         )
     except subprocess.TimeoutExpired as exc:
+        if usage_options is not None:
+            raise RemoteError("Usage read timed out; this Machine is not included") from exc
         raise RemoteError(
             "SSH command timed out; the remote operation may still be running; no retry was made"
         ) from exc
@@ -209,8 +214,19 @@ def _invoke(
         raise RemoteError(
             "SSH connection failed; check reachability, authentication, and the trusted host key"
         )
+    if usage_options is not None and completed.returncode != 0:
+        raise RemoteError("Update agent-hub and run remote trust --refresh on this Machine to enable Usage reads")
     expected = f"--dry-run {command}" if dry_run else command
     return _validate_report(completed.stdout, machine, expected, completed.returncode)
+
+
+def read_usage(machine: str, target: RemoteTarget, days: int, time_zone: str) -> dict[str, Any]:
+    """Read only local Transcripts on a target. Never recurse into its remotes."""
+    report = _invoke(target, _machine(machine), "usage", usage_options=(days, time_zone))
+    summary = report.get("usage")
+    if not isinstance(summary, dict):
+        raise RemoteError("Remote CLI did not return Usage data")
+    return summary
 
 
 def _checked_target(machine: str) -> RemoteTarget:

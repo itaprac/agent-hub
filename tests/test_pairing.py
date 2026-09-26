@@ -250,3 +250,28 @@ def test_same_key_cannot_silently_change_store(home, content, executable):
     other.mkdir()
     assert pairing.trust(KEY, CONTROLLER, other, executable).exit_code == 1
     assert wrapper.read_bytes() == before
+
+
+def test_usage_wrapper_accepts_only_bounded_read_options(home, content, executable):
+    wrapper = authorize(home, content, executable)
+    base = [executable, "--store", content, "usage", "--json"]
+    result = run_wrapper(wrapper, base + ["--days", "30", "--time-zone", "Europe/Warsaw"])
+    assert result.returncode == 0
+    for tail in ([], ["--dry-run"], ["--days", "999", "--time-zone", "UTC"],
+                 ["--days", "30", "--time-zone", "../UTC"],
+                 ["--days", "30", "--store", "/other"]):
+        assert run_wrapper(wrapper, base + tail).returncode == 126
+
+
+def test_refresh_backs_up_wrapper_and_keeps_authorized_keys(home, content, executable):
+    wrapper = authorize(home, content, executable)
+    authorized = home / ".ssh/authorized_keys"
+    before = authorized.read_bytes()
+    old = wrapper.read_bytes() + b"\n# previous version\n"
+    wrapper.write_bytes(old)
+    assert pairing.trust(KEY, CONTROLLER, content, executable).exit_code != 0
+    assert pairing.trust(KEY, CONTROLLER, content, executable, refresh=True).exit_code == 0
+    assert authorized.read_bytes() == before
+    (backup,) = wrapper.parent.glob(wrapper.name + ".backup-*")
+    assert backup.read_bytes() == old
+    assert wrapper.read_bytes() != old

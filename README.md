@@ -2,7 +2,7 @@
 
 Keep AI agent Skills and instructions in one Git repository, and apply them on each Machine.
 
-The Store is `~/.agents`. It contains `skills/`, `AGENTS.md`, optional `agents/<agent-id>.md` overlays, private Project skills, and Machine records. The App provides a CLI, a local Console, and local Usage analytics. Python 3.11+ is required. Node is needed only for skills.sh install and update commands.
+The Store is `~/.agents`. It contains `skills/`, `AGENTS.md`, optional `agents/<agent-id>.md` overlays, private Project skills, and Machine records. The App provides a CLI, a local Console, and Usage analytics across configured Machines. Python 3.11+ is required. Node is needed only for skills.sh install and update commands.
 
 ## Start on the first Machine
 
@@ -66,7 +66,7 @@ agents = ["claude-code"]
 machines = ["workstation"]
 ```
 
-The Console edits Skills, instructions, overlays, and `hub.toml`. It shows installed Skill sources and Fleet freshness from Git records. It reads Usage only on the local Machine. It binds to `127.0.0.1:7337` and has no authentication. See [network exposure](docs/network-exposure.md) for access through a trusted private network.
+The Console edits Skills, instructions, overlays, and `hub.toml`. It shows installed Skill sources and Fleet freshness from Git records. Usage combines local activity with read-only SSH reports from explicitly configured Machines. It names missing Machines when totals are partial. It binds to `127.0.0.1:7337` and has no authentication. See [network exposure](docs/network-exposure.md) for access through a trusted private network.
 
 For Sync and Apply on another Machine from this Console, see [remote control](docs/remote-control.md).
 

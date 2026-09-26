@@ -48,10 +48,18 @@ def resolve(repo: Path, requested_path: Any) -> Path:
     path = candidate.relative_to(repo)
     if any(part.startswith(".") for part in path.parts):
         raise FileError(400, f"hidden paths are not editable: {path}")
+    # Disabled items mirror the Store layout; backups copy any editable file.
+    area = path.parts[0]
+    content_path = Path(*path.parts[1:]) if area == "disabled" and len(path.parts) > 1 else path
     editable_content = (
-        path.parts[0] in {"skills", "projects"}
-        or path.as_posix() == "AGENTS.md"
-        or (len(path.parts) == 2 and path.parts[0] == "agents" and path.suffix == ".md")
+        area == "backups"
+        or content_path.parts[0] in {"skills", "projects"}
+        or content_path.as_posix() == "AGENTS.md"
+        or (
+            len(content_path.parts) == 2
+            and content_path.parts[0] == "agents"
+            and content_path.suffix == ".md"
+        )
     )
     editable_config = path.as_posix() == "hub.toml"
     if not editable_content and not editable_config:

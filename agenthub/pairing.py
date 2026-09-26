@@ -89,7 +89,7 @@ PATH = {os.pathsep.join([str(home / ".local/bin"), "/opt/homebrew/bin", "/usr/lo
 def main():
     try:
         args = shlex.split(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
-        if len(args) not in (5, 6):
+        if len(args) not in (5, 6, 9):
             raise ValueError()
         if args[1] != "--store" or args[4] != "--json":
             raise ValueError()
@@ -97,11 +97,18 @@ def main():
             raise ValueError()
         if str(Path(args[0]).resolve()) != EXECUTABLE or str(Path(args[2]).resolve()) != STORE:
             raise ValueError()
-        if args[3] not in ("status", "apply", "sync"):
+        if args[3] not in ("status", "apply", "sync", "usage"):
             raise ValueError()
-        if len(args) == 6 and (args[5] != "--dry-run" or args[3] == "status"):
+        if args[3] == "usage":
+            from zoneinfo import ZoneInfo
+            if len(args) != 9 or args[5] != "--days" or args[6] not in ("1", "7", "30", "90") or args[7] != "--time-zone":
+                raise ValueError()
+            ZoneInfo(args[8])
+        elif len(args) == 9:
             raise ValueError()
-    except (ValueError, OSError, RuntimeError):
+        if len(args) == 6 and (args[5] != "--dry-run" or args[3] not in ("apply", "sync")):
+            raise ValueError()
+    except (ValueError, OSError, RuntimeError, KeyError):
         print("agent-hub: SSH command denied", file=sys.stderr)
         return 126
     command = [EXECUTABLE, "--store", STORE, args[3], "--json"] + args[5:]
@@ -117,7 +124,7 @@ if __name__ == "__main__":
 
 
 def trust(
-    public_key: str, controller_ip: str, repo: Path, executable: Path
+    public_key: str, controller_ip: str, repo: Path, executable: Path, *, refresh: bool = False
 ) -> TrustReport:
     """Append a restricted public key, with a backup of existing SSH keys."""
     checks: list[core.StatusCheck] = []
@@ -144,9 +151,10 @@ def trust(
         for path in (authorized, wrapper):
             _safe_path(path, home)
         content = _wrapper(repo, executable, home)
-        if wrapper.exists() and wrapper.read_bytes() != content:
+        changed_wrapper = wrapper.exists() and wrapper.read_bytes() != content
+        if changed_wrapper and not refresh:
             raise ValueError(
-                "this key already has a different pairing configuration; remove its previous agent-hub authorization before pairing again"
+                "this key already has a different pairing configuration; use --refresh to back up and replace its command wrapper"
             )
         forced = shlex.join([sys.executable, "-I", str(wrapper)])
         escaped = forced.replace("\\", "\\\\").replace('"', '\\"')
@@ -166,7 +174,14 @@ def trust(
         for directory in (authorized.parent, wrapper.parent):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             directory.chmod(0o700)
-        if not wrapper.exists():
+        if changed_wrapper:
+            descriptor, backup = tempfile.mkstemp(prefix=wrapper.name + ".backup-", dir=wrapper.parent)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(wrapper.read_bytes())
+                handle.flush()
+                os.fsync(handle.fileno())
+            fileio.atomic_write(wrapper, content, 0o600)
+        elif not wrapper.exists():
             fileio.atomic_write(wrapper, content, 0o600)
         else:
             wrapper.chmod(0o600)
@@ -192,7 +207,7 @@ def trust(
                 )
             separator = b"\n" if existing and not existing.endswith(b"\n") else b""
             fileio.atomic_write(authorized, existing + separator + line + b"\n", 0o600)
-            message = f"trusted {controller} for status, apply, and sync on {repo}"
+            message = f"trusted {controller} for status, usage, apply, and sync on {repo}"
         checks.append(
             core.StatusCheck(
                 kind="pairing", level="ok", text=message, target=str(authorized)

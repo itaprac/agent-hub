@@ -8,6 +8,8 @@ import { renderLog, renderStatusView, summarize } from "./status.js";
 import { store, subscribe, update, withBusy } from "./store.js";
 import { mountSettings, renderSettings } from "./settings.js";
 import { mountTheme } from "./theme.js";
+import { createLifecycle } from "./lifecycle.js";
+import { editAgents, showSkillTargets } from "./targets.js";
 import { isUsageLoading, mountUsage, refreshUsage, renderUsage } from "./usage.js";
 import { buildConfigTree, buildInstructionsTree, buildSkillsTree, createWorkspace } from "./workspace.js";
 
@@ -92,6 +94,7 @@ async function runHub(label, invoke) {
       setLogOpen(true);
     }
     await refreshAll();
+    await reloadConfigEditor();
     return result;
   });
 }
@@ -133,9 +136,11 @@ function paintDirty() {
 }
 
 function setupWorkspaces() {
+  const lifecycle = createLifecycle({ runHub, refresh: afterEdit });
   workspaces.skills = createWorkspace($("#view-skills"), {
     title: "Skills",
     buildTree: buildSkillsTree,
+    buildContext: lifecycle.skillContext,
     onChanged: afterEdit,
     onDirty: paintDirty,
     actions: [
@@ -148,15 +153,35 @@ function setupWorkspaces() {
   workspaces.instructions = createWorkspace($("#view-instructions"), {
     title: "Instructions",
     buildTree: buildInstructionsTree,
+    buildContext: lifecycle.instructionContext,
     onChanged: afterEdit,
     onDirty: paintDirty,
   });
   workspaces.config = createWorkspace($("#view-config"), {
     title: "Config",
     buildTree: buildConfigTree,
+    buildContext: configContext,
     onChanged: afterEdit,
     onDirty: paintDirty,
   });
+}
+
+function configContext(path, state) {
+  if (path !== "hub.toml") return null;
+  return {
+    label: "hub.toml",
+    note: `${state.hub?.enabled ? `${state.hub.enabled.length} Agents` : "detected Agents"} · ${state.hub?.mode || "symlink"} · ${Object.keys(state.hub?.skills || {}).length} Skill targets`,
+    actions: [
+      { label: "Agents & mode", title: "Choose the Agents that Apply targets", run: () => editAgents(state, runHub) },
+      { label: "Skill targets", title: "Choose the Machines and Agents for each Skill", run: () => showSkillTargets(state, runHub) },
+    ],
+  };
+}
+
+// Show a settings change in an open, unchanged hub.toml.
+async function reloadConfigEditor() {
+  const editor = workspaces.config?.editor;
+  if (editor && editor.path() === "hub.toml" && !editor.isDirty()) await editor.reload();
 }
 
 async function installSkill() {

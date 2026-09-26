@@ -48,7 +48,7 @@ def test_retired_peer_token_cannot_authorize_mutations(
     assert not (home / ".claude" / "skills" / "alpha").exists()
 
 
-def test_usage_reads_only_the_local_summary_even_with_retired_peer_configuration(
+def test_usage_uses_configured_summary_even_with_retired_peer_configuration(
     server: str, content: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write(
@@ -56,13 +56,13 @@ def test_usage_reads_only_the_local_summary_even_with_retired_peer_configuration
         '[urls]\ntestmachine="http://local.invalid"\nremote="http://remote.invalid"\n',
     )
     calls = []
-    expected = {"local-summary": True}
+    expected = {"configured-summary": True}
 
     def local_summary(*, days: int, time_zone: str | None) -> dict:
         calls.append((days, time_zone))
         return expected
 
-    monkeypatch.setattr(webapp.usage, "read_summary", local_summary)
+    monkeypatch.setattr(webapp.usage_fleet, "read_summary", local_summary)
     with urllib.request.urlopen(f"{server}/api/usage?days=7&tz=UTC", timeout=5) as response:
         assert json.loads(response.read()) == expected
     assert calls == [(7, "UTC")]

@@ -461,7 +461,7 @@ function skeleton() {
         el("div", { class: "usage-provider usage-skel-block usage-skel-row" }),
       ]),
     ]),
-    el("p", { class: "usage-scan", text: "Scanning local transcripts and enabled usage sources…" }),
+    el("p", { class: "usage-scan", text: "Reading usage from configured machines…" }),
   ]);
 }
 
@@ -470,8 +470,8 @@ function coverageStrip(summary) {
   if (!sources.length) return null;
   return el("div", { class: "usage-coverage" }, sources.map((source) =>
     el("div", { class: `usage-coverage-row ${source.status === "ok" ? "is-ok" : "is-bad"}` }, [
-      el("span", { class: "usage-coverage-name", text: PROVIDER_LABEL[source.provider] || source.provider }),
-      el("span", { text: source.status === "ok" ? `${formatCount(source.scannedFiles)} local files` : source.message || "Could not report local usage" }),
+      el("span", { class: "usage-coverage-name", text: `${source.machine} · ${PROVIDER_LABEL[source.provider] || source.provider}` }),
+      el("span", { text: source.status === "ok" ? `${formatCount(source.scannedFiles)} ${source.provider === "cursor" ? "account events" : "files"}` : source.message || "Could not report usage" }),
     ])
   ));
 }
@@ -515,7 +515,7 @@ function paintUsagePage(root, snapshot, view) {
       el("h1", { class: "title", text: "Usage" }),
       el("p", {
         class: "usage-range",
-        text: summary ? windowLabel(summary) : "Local coding-agent transcripts on this machine",
+        text: summary ? `${windowLabel(summary)} · Configured machines` : "Usage across configured machines",
       }),
     ]),
     el("div", { class: "usage-head-actions" }, [
@@ -536,6 +536,23 @@ function paintUsagePage(root, snapshot, view) {
     root.append(skeleton());
     return;
   }
+
+  for (const machine of summary.machines || []) {
+    if (machine.status !== "ok") {
+      root.append(el("div", { class: "usage-error", role: "status", text: `${machine.id} is not included. ${machine.message || "Could not read usage."} The totals below are partial.` }));
+    }
+    if (machine.status === "ok" && machine.pricing?.status === "unavailable") {
+      root.append(el("div", { class: "usage-error", role: "status", text: `${machine.id}: model prices are unavailable. Its token counts are included, but its estimated cost is incomplete.` }));
+    }
+  }
+
+  const machineRows = summary.rollups.byMachine || [];
+  if (machineRows.length) root.append(el("div", { class: "usage-coverage" }, machineRows.map((row) =>
+    el("div", { class: "usage-coverage-row is-ok" }, [
+      el("span", { class: "usage-coverage-name", text: row.machine }),
+      el("span", { text: `${formatUsd(row.costUsd)} · ${formatTokens(row.totalTokens)} tokens · ${formatCount(row.sessions)} sessions` }),
+    ])
+  )));
 
   const coverage = coverageStrip(summary);
   if (coverage) root.append(coverage);
@@ -562,7 +579,7 @@ function paintUsagePage(root, snapshot, view) {
   const heroValue = metric === "cost" ? `${formatUsd(merged.costUsd)}*` : formatTokens(merged.totalTokens);
   const heroNote =
     metric === "cost"
-      ? "* if billed at full API rate"
+      ? "* API cost estimate. This is not your subscription bill."
       : `Input, cache reads and output across ${formatCount(merged.sessions)} sessions.`;
 
   root.append(

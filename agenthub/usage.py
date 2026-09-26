@@ -31,10 +31,8 @@ RATES_TTL_S = 24 * 60 * 60
 RATES_RETRY_S = 5 * 60
 MTIME_SLACK_S = 36 * 60 * 60
 UNPRICEABLE = {"<synthetic>", "synthetic", "opus", "sonnet", "haiku", "fable"}
-# Codex review turns are not in LiteLLM; price them as the current Codex default.
 # Grok Build session files name the sampler grok-4.6-build.
 MODEL_ALIASES = {
-    "codex-auto-review": "gpt-5.3-codex",
     "grok-4.6-build": "grok-4.6",
     "grok-build": "grok-4.6",
 }
@@ -1099,10 +1097,20 @@ def read_summary(
     days: int = 30,
     time_zone: str | None = None,
     settings: dict[str, Any] | None = None,
+    *, wait_for_rates: bool = False,
 ) -> dict[str, Any]:
     current_settings = settings if settings is not None else load_settings()
     _, time_zone = _resolve_time_zone(time_zone)
     _ensure_rates_refresh()
+    # A short-lived CLI has no later request that can see a background fetch.
+    # Wait only for a cold rate table; the Console keeps its nonblocking path.
+    if wait_for_rates:
+        deadline = time.monotonic() + 11
+        while time.monotonic() < deadline:
+            with _RATES_LOCK:
+                if _RATES or not _RATES_REFRESHING:
+                    break
+            time.sleep(0.05)
     _status, _known_models, rates_generation = _rates_state()
     key = (
         str(Path.home()),

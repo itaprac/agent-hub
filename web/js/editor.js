@@ -6,7 +6,7 @@ import { confirmDialog, conflictDialog } from "./modals.js";
 
 let editorSequence = 0;
 
-export function createEditor({ onSaved, onDeleted, onDirty, emptyTitle = "Pick a file", emptyBody = "Select a file in the tree to edit it here." } = {}) {
+export function createEditor({ onSaved, onDeleted, onDirty, context = null, emptyTitle = "Pick a file", emptyBody = "Select a file in the tree to edit it here." } = {}) {
   const editorId = ++editorSequence;
   let current = null; // {path, exists, revision}
   let baseline = "";
@@ -15,7 +15,7 @@ export function createEditor({ onSaved, onDeleted, onDirty, emptyTitle = "Pick a
   const pathLabel = el("span", { class: "editor-path" });
   const flag = el("span", { class: "editor-flag", hidden: true });
   const revertButton = el("button", { class: "btn", text: "Revert", onClick: revert, disabled: true });
-  const deleteButton = el("button", { class: "btn btn-danger", text: "Delete", onClick: remove, disabled: true });
+  const deleteButton = el("button", { class: "btn btn-danger", text: "Delete file", onClick: remove, disabled: true });
   const saveButton = el("button", { class: "btn btn-primary", text: "Save", onClick: save, disabled: true });
 
   const textareaId = `file-editor-${editorId}`;
@@ -106,6 +106,8 @@ export function createEditor({ onSaved, onDeleted, onDirty, emptyTitle = "Pick a
 
   function showPane(hasFile) {
     clear(element);
+    // The item (Skill or instruction) is above the file, which is a part of it.
+    if (hasFile && context) element.append(context);
     element.append(head);
     element.append(hasFile ? body : placeholder);
     if (hasFile) element.append(foot);
@@ -341,6 +343,18 @@ export function createEditor({ onSaved, onDeleted, onDirty, emptyTitle = "Pick a
     }
   }
 
+  async function reload() {
+    if (!current) return false;
+    const path = current.path;
+    try {
+      showLatest(path, await readLatest(path));
+      return true;
+    } catch (error) {
+      toast(`reload failed: ${error.message}`, "err", 7000);
+      return false;
+    }
+  }
+
   showPane(false);
   refreshFlags();
 
@@ -349,7 +363,11 @@ export function createEditor({ onSaved, onDeleted, onDirty, emptyTitle = "Pick a
     open,
     close,
     save,
+    reload,
+    confirmDiscard,
     isDirty,
     path: () => (current ? current.path : null),
+    revision: () => (current ? current.revision : null),
+    text: () => textarea.value,
   };
 }

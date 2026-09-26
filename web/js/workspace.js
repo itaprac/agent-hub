@@ -3,12 +3,16 @@
 import { clear, el, formatBytes, toast } from "./dom.js";
 import { createEditor } from "./editor.js";
 
-export function createWorkspace(section, { title, actions = [], buildTree, onChanged, onDirty }) {
+export function createWorkspace(section, { title, actions = [], buildTree, buildContext, onChanged, onDirty }) {
   const expanded = new Set();
   let selected = null;
   let lastTree = [];
+  let lastState = null;
   let query = "";
   let nodeDomSequence = 0;
+
+  // Actions for the item behind the open file, such as Disable or Back up.
+  const context = buildContext ? el("div", { class: "context-bar", role: "group" }) : null;
 
   const editor = createEditor({
     onSaved: async (path) => {
@@ -20,6 +24,7 @@ export function createWorkspace(section, { title, actions = [], buildTree, onCha
       if (onChanged) await onChanged();
     },
     onDirty,
+    context,
     emptyTitle: "Pick a file",
     emptyBody: `Select a file in the ${title.toLowerCase()} tree.`,
   });
@@ -60,12 +65,53 @@ export function createWorkspace(section, { title, actions = [], buildTree, onCha
     if (opened) {
       selected = file.path;
       paint(lastTree);
+      paintContext();
     }
+  }
+
+  // Open a path after it moved, for example into disabled/ and back.
+  async function openPath(path) {
+    await editor.close({ force: true });
+    selected = null;
+    if (path) {
+      const opened = await editor.open(path);
+      if (opened) selected = path;
+    }
+    paint(lastTree);
+    paintContext();
+  }
+
+  function paintContext() {
+    if (!context) return;
+    const path = editor.path();
+    const info = path && lastState ? buildContext(path, lastState, { editor, openPath }) : null;
+    clear(context);
+    context.hidden = !info;
+    if (!info) return;
+    context.setAttribute("aria-label", info.label);
+    const parts = [
+      info.off === undefined ? null : el("span", { class: `state-pill ${info.off ? "off" : "on"}`, text: info.off ? "Disabled" : "Enabled" }),
+      el("span", { class: "context-name", text: info.label }),
+      info.note ? el("span", { class: "context-note", text: info.note }) : null,
+      el("span", { class: "spacer" }),
+      ...info.actions.map((action) =>
+        el("button", {
+          type: "button",
+          class: `btn${action.kind ? ` btn-${action.kind}` : ""}`,
+          text: action.label,
+          title: action.title || "",
+          onClick: action.run,
+        })
+      ),
+    ];
+    // DOM append() writes null as text, so drop the missing parts.
+    context.append(...parts.filter(Boolean));
   }
 
   function fileItem(file) {
     const classes = ["tree-item", "tree-file"];
     if (!file.exists) classes.push("missing");
+    if (file.off) classes.push("is-off");
     if (selected === file.path) classes.push("active");
     return el(
       "button",
@@ -107,7 +153,7 @@ export function createWorkspace(section, { title, actions = [], buildTree, onCha
     const filtering = Boolean(query);
     const isOpen = filtering || expanded.has(node.id);
     const filesId = `${section.id}-node-files-${++nodeDomSequence}`;
-    const wrapper = el("div", { class: `tree-node${isOpen ? " open" : ""}` });
+    const wrapper = el("div", { class: `tree-node${isOpen ? " open" : ""}${node.off ? " is-off" : ""}` });
     const primary = node.files.find((file) => /^SKILL\.md$/i.test(file.label)) || node.files[0];
     const toggle = el(
       "button",
@@ -207,7 +253,9 @@ export function createWorkspace(section, { title, actions = [], buildTree, onCha
   return {
     editor,
     render(state) {
+      lastState = state;
       paint(state ? buildTree(state) : []);
+      paintContext();
     },
   };
 }
@@ -231,13 +279,16 @@ export function skillProvenance(skill) {
   };
 }
 
-function skillNodes(skills, prefix) {
+function skillNodes(skills, prefix, filters = {}) {
   return (skills || []).map((skill) => ({
     id: `${prefix}:${skill.name}`,
     label: skill.name,
     title: skill.path,
+    off: Boolean(skill.disabled),
     provenance: skillProvenance(skill),
-    meta: `${skill.files.length} file${skill.files.length === 1 ? "" : "s"}`,
+    meta: skill.disabled
+      ? "disabled"
+      : `${filters[skill.name] ? "limited · " : ""}${skill.files.length} file${skill.files.length === 1 ? "" : "s"}`,
     files: skill.files.map((file) => ({
       label: file.name,
       path: file.path,
@@ -252,7 +303,7 @@ export function buildSkillsTree(state) {
   const groups = [
     {
       label: "Global",
-      nodes: skillNodes(state.skills.global, "global"),
+      nodes: skillNodes(state.skills.global, "global", state.hub?.skills),
       emptyText: "no global skills",
     },
   ];
@@ -261,27 +312,36 @@ export function buildSkillsTree(state) {
       label: project.name,
       note: project.available ? "" : "off-machine",
       title: project.path || project.note,
-      nodes: skillNodes(state.skills.projects[project.name], `project:${project.name}`),
+      nodes: skillNodes(state.skills.projects[project.name], `project:${project.name}`, state.hub?.skills),
       emptyText: "no project skills",
     });
   }
   return groups;
 }
 
-function instructionFiles(entries) {
-  return (entries || []).map((entry) => ({
-    label: entry.name,
-    path: entry.path,
-    exists: entry.exists,
-    meta: entry.exists ? entry.kind : "create",
-  }));
+function instructionFiles(entries, backups) {
+  return (entries || []).map((entry) => {
+    const count = (backups?.[entry.source || entry.path] || []).length;
+    const state = entry.disabled ? "disabled" : entry.exists ? entry.kind : "create";
+    return {
+      label: entry.name,
+      path: entry.path,
+      exists: entry.exists,
+      off: Boolean(entry.disabled),
+      meta: count ? `${state} · ${count} backup${count === 1 ? "" : "s"}` : state,
+    };
+  });
 }
+
+// Entries without `source` come from an older server; they are never disabled.
+const instructionSource = (entry) => entry.source || entry.path;
 
 export function buildInstructionsTree(state) {
   const entries = state.instructions?.global || [];
+  const backups = state.backups || {};
   return [
-    { label: "Shared instructions", files: instructionFiles(entries.filter((entry) => entry.path === "AGENTS.md")) },
-    { label: "Overlays", files: instructionFiles(entries.filter((entry) => entry.path.startsWith("agents/"))) },
+    { label: "Shared instructions", files: instructionFiles(entries.filter((entry) => instructionSource(entry) === "AGENTS.md"), backups) },
+    { label: "Overlays", files: instructionFiles(entries.filter((entry) => instructionSource(entry).startsWith("agents/")), backups) },
   ];
 }
 

@@ -647,3 +647,9 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def test_auto_review_does_not_guess_an_unrelated_model_price():
+    totals = {**usage._empty_totals(), "outputTokens": 100}
+    rates = {"gpt-5.3-codex": {"input": 1e-6, "output": 2e-6, "cacheRead": 1e-7, "cacheCreate": 1e-6}}
+    assert usage._price("codex-auto-review", totals, None, rates) == (0.0, 0.0, "unpriced")

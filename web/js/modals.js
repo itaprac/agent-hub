@@ -250,3 +250,29 @@ export function adoptProjectField() {
     ],
   };
 }
+
+// A dialog with custom content. `body` receives `choose(value)` so rows can settle it.
+export function choiceDialog({ title, sub, body, buttons = [], wide = false }) {
+  return new Promise((resolve) => {
+    if (pending) settle(null);
+    pending = resolve;
+    const node = shell({
+      title,
+      sub,
+      body: body((value) => settle(value)),
+      footer: buttons.map((button) =>
+        el("button", {
+          type: "button",
+          class: `btn${button.kind ? ` btn-${button.kind}` : ""}`,
+          text: button.label,
+          onClick: () => settle(button.value ?? null),
+        })
+      ),
+    });
+    node.classList.toggle("modal-wide", wide);
+    node.addEventListener("close", () => node.classList.remove("modal-wide"), { once: true });
+    node.showModal();
+    const focus = node.querySelector(".modal-foot .btn:last-child") || node.querySelector(".modal-body button");
+    if (focus) focus.focus();
+  });
+}

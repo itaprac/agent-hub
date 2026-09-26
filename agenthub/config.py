@@ -317,7 +317,10 @@ def load_machine_projection(repo: Path, *, copy: bool = False) -> MachineProject
                 managed.setdefault(directory, set()).update(
                     item.name for item in targets
                 )
-        if agent.instructions_global and (repo / "AGENTS.md").is_file():
+        # A disabled AGENTS.md keeps the Managed block, with only the enabled sources.
+        if agent.instructions_global and (
+            (repo / "AGENTS.md").is_file() or (repo / "disabled" / "AGENTS.md").is_file()
+        ):
             sources = tuple(
                 path
                 for path in (
@@ -326,19 +329,18 @@ def load_machine_projection(repo: Path, *, copy: bool = False) -> MachineProject
                 )
                 if path.is_file()
             )
-            if sources:
-                content = "\n\n".join(
-                    path.read_text(encoding="utf-8").rstrip("\n") for path in sources
+            content = "\n\n".join(
+                path.read_text(encoding="utf-8").rstrip("\n") for path in sources
+            )
+            instruction_targets.append(
+                InstructionTarget(
+                    agent.name,
+                    None,
+                    sources,
+                    content,
+                    Path(agent.instructions_global),
                 )
-                instruction_targets.append(
-                    InstructionTarget(
-                        agent.name,
-                        None,
-                        sources,
-                        content,
-                        Path(agent.instructions_global),
-                    )
-                )
+            )
     from .projects import load_projects
 
     try:

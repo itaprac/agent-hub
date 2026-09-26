@@ -55,6 +55,13 @@ export const api = {
   addSkill: (name, project) => request("POST", "/api/add-skill", { name, project: project || null }),
   adopt: (path, project, name) =>
     request("POST", "/api/adopt", { path, project: Boolean(project), name: name || null }),
+  skillAction: (action, name, project) => request("POST", "/api/skill", { action, name, project: project || null }),
+  instructionAction: (action, path) => request("POST", "/api/instruction", { action, path }),
+  createBackup: (path, label) => request("POST", "/api/backup", { action: "create", path, label: label || null }),
+  restoreBackup: (path, id, revision) => request("POST", "/api/backup", { action: "restore", path, id, revision }),
+  deleteBackup: (path, id) => request("POST", "/api/backup", { action: "delete", path, id }),
+  skillTargets: (name, machines, agents) => request("POST", "/api/config", { action: "skill-targets", name, machines, agents }),
+  agentSettings: (enabled, mode) => request("POST", "/api/config", { action: "agents", enabled, mode }),
   readFile: (path) => request("GET", `/api/file?path=${encodeURIComponent(path)}`),
   writeFile: (path, content, revision) => request("PUT", "/api/file", { path, content, revision }),
   deleteFile: (path, revision) => request("DELETE", "/api/file", { path, revision }),
