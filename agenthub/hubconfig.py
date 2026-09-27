@@ -53,7 +53,7 @@ def _header_path(line: str) -> tuple[str, ...] | None:
 
 def _sections(lines: list[str]) -> list[tuple[tuple[str, ...], int, int]]:
     """(path, first line, end line) for the preamble and every table."""
-    starts = [((), 0)]
+    starts: list[tuple[tuple[str, ...], int]] = [((), 0)]
     for index, line in enumerate(lines):
         path = _header_path(line)
         if path is not None:

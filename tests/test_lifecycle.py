@@ -56,6 +56,69 @@ def test_enable_restores_skill_and_removes_empty_disabled_tree(content: Path, ho
     assert (home / ".claude" / "skills" / "alpha").is_symlink()
 
 
+def use_copy_mode(content: Path) -> None:
+    path = content / "hub.toml"
+    path.write_text(path.read_text().replace('mode = "symlink"', 'mode = "copy"'))
+
+
+def test_disable_and_enable_copied_skill(content: Path, home: Path) -> None:
+    use_copy_mode(content)
+    assert core.apply_report(projection(content)).exit_code == 0
+    target = home / ".claude/skills/alpha"
+    assert target.is_dir() and not target.is_symlink()
+
+    assert lifecycle.skill(projection(content), "disable", "alpha").exit_code == 0
+    assert not target.exists()
+    assert lifecycle.skill(projection(content), "enable", "alpha").exit_code == 0
+    assert (target / "SKILL.md").read_text() == "# alpha\n"
+
+
+def test_apply_prunes_copy_disabled_on_another_machine(content: Path, home: Path) -> None:
+    use_copy_mode(content)
+    core.apply_report(projection(content))
+    target = home / ".claude/skills/alpha"
+    disabled = content / "disabled/skills/alpha"
+    disabled.parent.mkdir(parents=True)
+    (content / "skills/alpha").rename(disabled)
+
+    checks = core.status_report(projection(content)).checks
+    assert any(check.level == "STALE" and check.target == str(target) for check in checks)
+    assert core.apply_report(projection(content), dry_run=True).exit_code == 0
+    assert target.is_dir()
+    assert core.apply_report(projection(content)).exit_code == 0
+    assert not target.exists()
+    assert core.apply_report(projection(content)).exit_code == 0
+
+
+@pytest.mark.parametrize("changed", ["modified", "symlink", "store"])
+def test_disable_preserves_changed_or_unsafe_copy(content: Path, home: Path, changed: str) -> None:
+    use_copy_mode(content)
+    core.apply_report(projection(content))
+    target = home / ".claude/skills/alpha"
+    if changed == "modified":
+        write(target / "local.txt", "Keep my work\n")
+    else:
+        (target / "SKILL.md").unlink()
+        target.rmdir()
+        if changed == "symlink":
+            destination = home / "foreign"
+        else:
+            destination = content / "operator/alpha"
+        write(destination / "SKILL.md", "# alpha\n")
+        if changed == "symlink":
+            target.symlink_to(destination, target_is_directory=True)
+        else:
+            target.parent.rmdir()
+            target.parent.symlink_to(destination.parent, target_is_directory=True)
+
+    report = lifecycle.skill(projection(content), "disable", "alpha")
+    assert report.exit_code == 1
+    assert any(check.level == "DRIFT" and check.target == str(target) for check in report.checks)
+    assert (target / "SKILL.md").read_text() == "# alpha\n"
+    if changed == "modified":
+        assert (target / "local.txt").read_text() == "Keep my work\n"
+
+
 def test_enable_refuses_to_overwrite_an_enabled_skill(content: Path) -> None:
     lifecycle.skill(projection(content), "disable", "alpha")
     write(content / "skills" / "alpha" / "SKILL.md", "# new alpha\n")
@@ -207,3 +270,11 @@ def test_http_routes(server: str, content: Path) -> None:
     assert status == 200 and payload["backup"].startswith("backups/AGENTS.md/")
     status, payload = post(server, "/api/backup", {"action": "restore", "path": "disabled/AGENTS.md", "id": "x.md"})
     assert status == 428
+
+
+@pytest.mark.parametrize("route", ["/api/skill", "/api/instruction", "/api/backup"])
+@pytest.mark.parametrize("action", [None, [], {}, 1])
+def test_http_lifecycle_rejects_non_string_actions(server: str, route: str, action: object) -> None:
+    status, payload = post(server, route, {"action": action})
+    assert status == 400
+    assert "action" in payload["error"]

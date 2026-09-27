@@ -19,6 +19,7 @@ from .config import (
     SkillTarget,
     expand_path,
     load_machine_projection,
+    skill_directories,
     validate_name,
 )
 
@@ -420,6 +421,46 @@ def apply_instruction(item: InstructionTarget, dry_run: bool) -> StatusCheck:
     return StatusCheck(level="render", text=label, **fields)
 
 
+def disabled_copy_checks(
+    projection: MachineProjection, *, apply: bool = False, dry_run: bool = False
+) -> list[StatusCheck]:
+    """Remove unchanged copies of disabled Skills, including after a remote Sync.
+
+    The disabled source is the reference for recognizing an unchanged copy.
+    Locally modified directories and foreign links require operator attention.
+    """
+    checks = []
+    sources = skill_directories(projection.repo / "disabled" / "skills")
+    for agent in projection.agents:
+        if agent.mode != "copy" or agent.universal or not agent.skills_global:
+            continue
+        for source in sources:
+            if (projection.repo / "skills" / source.name).exists():
+                continue
+            target = Path(agent.skills_global) / source.name
+            if not target.exists() and not target.is_symlink():
+                continue
+            fields = dict(kind="skill", agent=agent.name, name=source.name, target=str(target))
+            try:
+                if (target.is_symlink() or not target.is_dir()
+                        or target.resolve().is_relative_to(projection.repo.resolve())
+                        or tree_hashes(target) != tree_hashes(source)):
+                    checks.append(StatusCheck(
+                        level="DRIFT", text=f"{target}: disabled Skill has a modified or unsafe copy; leave it unchanged", **fields,
+                    ))
+                    continue
+                if apply and not dry_run:
+                    shutil.rmtree(target)
+                verb = "would remove" if dry_run else "remove" if apply else "pending removal of"
+                checks.append(StatusCheck(
+                    level="prune" if apply else "STALE",
+                    text=f"{verb} disabled Skill copy {target}", **fields,
+                ))
+            except (OSError, RuntimeError) as exc:
+                checks.append(StatusCheck(level="DRIFT", text=f"{target}: {one_line(str(exc))}", **fields))
+    return checks
+
+
 def apply_report(projection: MachineProjection, dry_run: bool = False) -> ApplyReport:
     """Deploy every managed target and return the structured result."""
     checks: list[StatusCheck] = [
@@ -433,6 +474,7 @@ def apply_report(projection: MachineProjection, dry_run: bool = False) -> ApplyR
         if not project.available
     ]
     checks.extend(prune_skill_links(projection, dry_run))
+    checks.extend(disabled_copy_checks(projection, apply=True, dry_run=dry_run))
     for item in projection.skill_targets:
         if item.mode == "symlink":
             checks.append(apply_symlink(item, dry_run, projection.repo))
@@ -622,6 +664,7 @@ def status_report(projection: MachineProjection) -> StatusReport:
                 target=str(link),
             )
         )
+    checks.extend(disabled_copy_checks(projection))
     checks.extend(check_skill(item) for item in projection.skill_targets)
     checks.extend(check_instruction(item) for item in projection.instruction_targets)
     from .projects import check_links

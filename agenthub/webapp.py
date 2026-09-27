@@ -416,20 +416,20 @@ class Handler(BaseHTTPRequestHandler):
     def post_skill(self) -> None:
         payload = self.read_json()
         report = operations.ContentOperations(self.repo).skill_action(
-            payload.get("action"), payload.get("name"), payload.get("project")
+            required_name(payload, "action"), payload.get("name"), payload.get("project")
         )
         self.send_json(report.to_dict())
 
     def post_instruction(self) -> None:
         payload = self.read_json()
         report = operations.ContentOperations(self.repo).instruction_action(
-            payload.get("action"), payload.get("path")
+            required_name(payload, "action"), payload.get("path")
         )
         self.send_json(report.to_dict())
 
     def post_backup(self) -> None:
         payload = self.read_json()
-        action = payload.get("action")
+        action = required_name(payload, "action")
         revision = expected_revision(payload) if action == "restore" else None
         self.send_json(
             operations.ContentOperations(self.repo).backup_action(

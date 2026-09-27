@@ -319,7 +319,7 @@ def _scope_skills(
 ) -> list[dict[str, Any]]:
     """Enabled and disabled Skills of one scope, in canonical name order."""
     locks = relative == Path("skills")
-    result = []
+    result: list[dict[str, Any]] = []
     for base, disabled in ((repo, False), (repo / lifecycle.DISABLED, True)):
         provenance: dict[str, dict[str, str | None]] = {}
         if locks and (base / lifecycle.LOCKFILE).exists():
