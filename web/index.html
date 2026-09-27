@@ -6,11 +6,11 @@
 <meta name="color-scheme" content="dark light">
 <title>agent-hub</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23211f1a'/%3E%3Cg fill='%23e0b15a'%3E%3Ccircle cx='8' cy='8' r='2'/%3E%3Ccircle cx='3.2' cy='3.2' r='1.4'/%3E%3Ccircle cx='12.8' cy='3.2' r='1.4'/%3E%3Ccircle cx='3.2' cy='12.8' r='1.4'/%3E%3Ccircle cx='12.8' cy='12.8' r='1.4'/%3E%3C/g%3E%3C/svg%3E">
+<script src="/js/layout-redirect.js"></script>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 
-<div id="progress" class="progress" aria-hidden="true" hidden></div>
 <div id="app-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ============================================================ rail -->
@@ -28,40 +28,40 @@
     </span>
     <span class="mark-txt">
       <span class="mark-name">agent-hub</span>
-      <span class="mark-sub">skills across machines</span>
+      <span class="mark-sub">Skills across machines</span>
     </span>
   </div>
 
   <nav class="rail-nav" role="tablist" aria-label="Views" aria-orientation="vertical">
     <div class="sect" aria-hidden="true">Operate</div>
-    <div class="sect-rule" aria-hidden="true"></div>
     <button class="tab" id="tab-status" role="tab" data-tab="status" aria-selected="true" aria-controls="view-status" tabindex="0" title="Status (1)" aria-keyshortcuts="1">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.6 8.4h3l1.6-4 2.2 7 1.6-3.6h4"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
       <span class="lbl">Status</span>
       <kbd>1</kbd>
     </button>
     <button class="tab" id="tab-usage" role="tab" data-tab="usage" aria-selected="false" aria-controls="view-usage" tabindex="-1" title="Usage (2)" aria-keyshortcuts="2">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12.4 5.2 8l2.4 2.8L12.4 4.4"/><path d="M10.4 4.4h2v2"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18M6 16l4-5 3 3 5-7"/></svg>
       <span class="lbl">Usage</span>
       <kbd>2</kbd>
     </button>
 
     <div class="sect" aria-hidden="true">Repository</div>
-    <div class="sect-rule" aria-hidden="true"></div>
     <button class="tab" id="tab-skills" role="tab" data-tab="skills" aria-selected="false" aria-controls="view-skills" tabindex="-1" title="Skills (3)" aria-keyshortcuts="3">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 14 5v6L8 14.2 2 11V5z"/><path d="M2 5l6 3.2L14 5M8 8.2v6"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>
       <span class="lbl">Skills</span>
       <span class="tab-dot" hidden title="Unsaved edits"></span>
+      <span class="cnt" id="count-skills"></span>
       <kbd>3</kbd>
     </button>
     <button class="tab" id="tab-instructions" role="tab" data-tab="instructions" aria-selected="false" aria-controls="view-instructions" tabindex="-1" title="Instructions (4)" aria-keyshortcuts="4">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.4 2.2h6l3.2 3.2v8.4H3.4z"/><path d="M9.2 2.2v3.4h3.4M5.6 8.6h4.8M5.6 11h3.2"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></svg>
       <span class="lbl">Instructions</span>
       <span class="tab-dot" hidden title="Unsaved edits"></span>
+      <span class="cnt" id="count-instructions"></span>
       <kbd>4</kbd>
     </button>
     <button class="tab" id="tab-config" role="tab" data-tab="config" aria-selected="false" aria-controls="view-config" tabindex="-1" title="Config (5)" aria-keyshortcuts="5">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v1.8M8 12.6v1.8M14.4 8h-1.8M3.4 8H1.6M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3M12.5 12.5l-1.3-1.3M4.8 4.8 3.5 3.5"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M2.5 12h3M18.5 12h3M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></svg>
       <span class="lbl">Config</span>
       <span class="tab-dot" hidden title="Unsaved edits"></span>
       <kbd>5</kbd>
@@ -76,69 +76,85 @@
         <span class="host-meta" id="machine-host">…</span>
       </span>
       <button class="host-settings" id="btn-rail-settings" type="button" title="Settings" aria-label="Settings">
-        <svg class="host-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        <svg class="host-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
         <span class="host-settings-label">Settings</span>
       </button>
     </div>
   </div>
 </aside>
 
-<!-- ============================================================ shell -->
+<!-- ============================================================ canvas -->
 <div class="shell">
+  <div id="progress" class="progress" aria-hidden="true" hidden></div>
 
-  <div class="topline">
-    <span class="crumb">hub <b>/</b> <b id="crumb-view">status</b></span>
-    <span class="repo-path" id="repo-path" title="repository root"></span>
+  <header class="topline">
+    <span class="crumb"><span class="crumb-root">agent-hub</span><span class="crumb-sep" aria-hidden="true">/</span><b id="crumb-view">Status</b></span>
+    <span class="repo-path" id="repo-path" title="Store path"></span>
     <span class="spacer"></span>
+    <button class="btn btn-ghost go" id="btn-refresh" title="Refresh Store, status and Fleet (R)" aria-label="Refresh" aria-keyshortcuts="r">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+      <span class="btn-lbl">Refresh</span>
+      <kbd aria-hidden="true">R</kbd>
+    </button>
+    <button class="btn btn-ghost" id="btn-layout" type="button" data-layout-switch aria-keyshortcuts="m">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+      <span class="btn-lbl" data-layout-label>Editorial</span>
+      <kbd aria-hidden="true">M</kbd>
+    </button>
     <div class="theme-picker">
-      <button class="btn btn-icon" id="btn-theme" title="Colour scheme: dark" aria-label="Colour scheme"
+      <button class="btn btn-ghost btn-icon" id="btn-theme" title="Colour scheme: dark" aria-label="Colour scheme"
               aria-haspopup="menu" aria-expanded="false" aria-controls="theme-menu">
         <span id="theme-icon" aria-hidden="true"></span>
         <span id="theme-name">dark</span>
       </button>
       <div class="theme-menu" id="theme-menu" role="menu" aria-label="Colour scheme" hidden></div>
     </div>
-    <button class="btn go" id="btn-refresh" title="Refresh Store, status and Fleet (R)" aria-keyshortcuts="r">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.4 8a5.4 5.4 0 1 1-1.6-3.8"/><path d="M13.6 2v3h-3"/></svg>
-      Refresh
-    </button>
-  </div>
+  </header>
 
   <div id="banner" class="banner" role="alert" aria-atomic="true" hidden></div>
 
   <main id="views">
     <section class="view" id="view-status" data-view="status" role="tabpanel" aria-labelledby="tab-status" tabindex="0">
       <div class="page">
-        <h1 class="sr-only">Status</h1>
-
-        <section class="sec fleet-panel" id="fleet">
-          <div class="sec-head">
-            <h2 class="sec-title">Machines</h2>
-            <span class="pill pill-idle" id="fleet-verdict" title="Recorded Store revisions">
-              <span class="dot"></span><span id="fleet-verdict-text">Unknown</span>
-            </span>
-            <span class="spacer"></span>
-            <span class="sec-note" id="fleet-meta" role="status" aria-live="polite" aria-atomic="true"></span>
-            <button class="btn btn-primary" id="sync-all" type="button">Sync</button>
+        <section class="fleet-panel" id="fleet" aria-label="Machines">
+          <div class="hero">
+            <div class="pill pill-idle" id="fleet-verdict" title="Recorded Store revisions">
+              <span class="verdict-badge" aria-hidden="true">
+                <svg class="v-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+                <svg class="v-idle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/></svg>
+                <svg class="v-bad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v6M12 17h.01"/></svg>
+              </span>
+              <span class="verdict-copy">
+                <h1 class="verdict-title" id="fleet-verdict-text">Unknown</h1>
+                <span class="verdict-meta">
+                  <span id="fleet-rev"></span>
+                  <span id="fleet-count"></span>
+                  <span class="sec-note" id="fleet-meta" role="status" aria-live="polite" aria-atomic="true"></span>
+                </span>
+              </span>
+            </div>
+            <div class="hero-go">
+              <button class="btn btn-primary btn-lg" id="sync-all" type="button">Sync</button>
+            </div>
           </div>
           <div class="mgrid" id="fleet-grid"></div>
         </section>
 
-        <details class="sec status-details">
-          <summary>Local checks</summary>
-          <div class="statusbar" id="summary" role="status"></div>
+        <section class="sec checks-sec" aria-labelledby="checks-title">
           <div class="sec-head">
-            <h2 class="sec-title">Managed state</h2>
+            <h2 class="sec-title" id="checks-title">Local checks</h2>
+            <div class="statusbar" id="summary" role="status"></div>
             <span class="spacer"></span>
             <div class="status-toolbar" id="status-toolbar" hidden>
-              <div class="segmented" id="status-filter" role="group" aria-label="Managed state filter">
+              <div class="segmented segmented-sm" id="status-filter" role="group" aria-label="Local checks filter">
+                <span class="seg-ind" aria-hidden="true"></span>
                 <button class="seg active" type="button" data-filter="all" aria-pressed="true">All</button>
-                <button class="seg" type="button" data-filter="problems" aria-pressed="false">Problems</button>
+                <button class="seg" type="button" data-filter="problems" aria-pressed="false">Issues <span class="seg-count" id="status-issue-count"></span></button>
               </div>
             </div>
           </div>
-          <div id="status-groups" class="groups"></div>
-        </details>
+          <div id="status-groups" class="groups card"></div>
+        </section>
       </div>
     </section>
 
@@ -154,16 +170,26 @@
   </main>
 
   <footer class="logbar" id="logbar">
-    <button class="logbar-head" id="log-toggle" aria-expanded="false" aria-controls="log-body" title="Toggle the log drawer (L)" aria-keyshortcuts="l">
-      <span class="caret" aria-hidden="true">▸</span>
-      <span class="log-title">Log</span>
-      <kbd>L</kbd>
+    <button class="logbar-head" id="log-toggle" type="button" aria-expanded="false" aria-controls="log-drawer" title="Open the log (L)" aria-keyshortcuts="l">
+      <span class="log-dot" aria-hidden="true"></span>
+      <span class="log-title sr-only">Log:</span>
       <span class="log-cmd" id="log-cmd">no command yet</span>
       <span class="log-exit" id="log-exit" hidden></span>
-      <span class="spacer"></span>
-      <span class="log-time" id="log-time"></span>
+      <kbd aria-hidden="true">L</kbd>
     </button>
-    <pre class="log-body" id="log-body" hidden></pre>
+    <div class="log-drawer" id="log-drawer" role="region" aria-label="Command log">
+      <div class="log-drawer-head">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        <b>Log</b>
+        <span class="log-drawer-cmd" id="log-drawer-cmd"></span>
+        <span class="log-time" id="log-time"></span>
+        <span class="spacer"></span>
+        <button class="icon-btn" id="log-close" type="button" aria-label="Close the log" title="Close (L)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <pre class="log-body" id="log-body" tabindex="0" aria-label="Command output"></pre>
+    </div>
   </footer>
 </div>
 

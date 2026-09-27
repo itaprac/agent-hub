@@ -3,29 +3,22 @@
 import { api } from "./api.js";
 import { clear, el, formatBytes, splitPath, toast } from "./dom.js";
 import { confirmDialog, conflictDialog } from "./modals.js";
-import { HIGHLIGHT_LIMIT, LANGUAGE_LABEL, createHighlighter, languageFor } from "./highlight.js";
-import { icon } from "./icons.js";
-
-// Highlighting runs in the input handler for small files, so the coloured
-// layer never lags behind the caret. Bigger files paint on the next frame.
-const SYNC_PAINT_LIMIT = 250_000;
+import { createHighlightModel, languageFor } from "./highlight.js";
 
 let editorSequence = 0;
 
-export function createEditor({ onSaved, onDeleted, onDirty, context = null, emptyTitle = "Pick a file", emptyBody = "Select a file in the tree to edit it here." } = {}) {
+export function createEditor({ onSaved, onDeleted, onDirty, emptyTitle = "Pick a file", emptyBody = "Select a file to edit it here." } = {}) {
   const editorId = ++editorSequence;
   let current = null; // {path, exists, revision}
   let baseline = "";
   let busy = false;
 
   const pathLabel = el("span", { class: "editor-path" });
-  const flag = el("span", { class: "editor-flag", hidden: true });
-  const revertButton = el("button", { class: "btn btn-sm btn-ghost", type: "button", text: "Revert", onClick: revert, disabled: true });
-  const deleteButton = el("button", { class: "btn btn-sm btn-ghost btn-danger", type: "button", text: "Delete file", onClick: remove, disabled: true });
-  const saveLabel = el("span", { text: "Save" });
-  const saveButton = el("button", { class: "btn btn-sm btn-primary", type: "button", onClick: save, disabled: true, title: "Save (⌘S)", "aria-keyshortcuts": "Meta+S Control+S" }, [
-    saveLabel, el("kbd", { "aria-hidden": "true", text: "⌘S" }),
-  ]);
+  const flag = el("span", { class: "editor-flag" }, [el("span", { class: "dot", "aria-hidden": "true" }), el("span", { class: "flag-text", text: "Saved" })]);
+  const flagText = flag.lastChild;
+  const revertButton = el("button", { type: "button", class: "btn ghost sm", text: "Revert", onClick: revert, disabled: true });
+  const deleteButton = el("button", { type: "button", class: "btn ghost sm danger", text: "Delete file", onClick: remove, disabled: true });
+  const saveButton = el("button", { type: "button", class: "btn primary sm", text: "Save", onClick: save, disabled: true, "aria-keyshortcuts": "Meta+S" });
 
   const textareaId = `file-editor-${editorId}`;
   const textareaLabel = el("label", { class: "sr-only", for: textareaId, text: "File editor" });
@@ -37,24 +30,19 @@ export function createEditor({ onSaved, onDeleted, onDirty, context = null, empt
   });
   textarea.setAttribute("spellcheck", "false");
   textarea.setAttribute("wrap", "soft");
-  textarea.setAttribute("autocomplete", "off");
+  textarea.setAttribute("rows", "1");
 
-  // The textarea stays the real input (focus, undo, selection, IME). Its text is
-  // transparent over a highlighted copy that wraps the same way, so both layers
-  // grow together inside one scroll container and never need scroll syncing.
-  const highlight = createHighlighter();
-  const layer = el("pre", { class: "code-hl", "aria-hidden": "true" });
-  const sizer = el("div", { class: "code-sizer" }, [layer, textarea]);
-  let language = "plain";
-  let paintedText = null;
-  let paintedLines = [];
-  let paintFrame = 0;
+  // The highlighted copy sits under a transparent-text textarea. Both share one
+  // grid cell, font and padding, so wrapping and line positions match; the
+  // textarea stays the real input for focus, undo, selection and screen readers.
+  const model = createHighlightModel();
+  const overlay = el("pre", { class: "code-hl", "aria-hidden": "true" });
+  const code = el("div", { class: "code" }, [overlay, textarea]);
   let currentLine = -1;
 
-  const position = el("span", { class: "mono", text: "Ln 1, Col 1" });
-  const size = el("span", { class: "mono", text: "" });
-  const languageLabel = el("span", { text: "" });
-  const lineCount = el("span", { class: "mono", text: "" });
+  const language = el("span", { class: "editor-lang", text: "" });
+  const position = el("span", { text: "Ln 1, Col 1" });
+  const size = el("span", { text: "" });
   const editorStatus = el("span", {
     class: "sr-only",
     role: "status",
@@ -63,141 +51,81 @@ export function createEditor({ onSaved, onDeleted, onDirty, context = null, empt
   });
 
   const head = el("div", { class: "editor-head" }, [
-    pathLabel,
-    flag,
-    el("span", { class: "spacer" }),
-    revertButton,
-    deleteButton,
-    saveButton,
+    el("div", { class: "editor-id" }, [pathLabel, flag]),
+    el("div", { class: "editor-acts" }, [revertButton, deleteButton, saveButton]),
     editorStatus,
   ]);
-  const body = el("div", { class: "editor-body" }, [textareaLabel, sizer]);
-  const foot = el("div", { class: "editor-foot" }, [languageLabel, lineCount, size, el("span", { class: "spacer" }), position]);
+  const body = el("div", { class: "editor-body" }, [textareaLabel, code]);
+  const foot = el("div", { class: "editor-foot" }, [
+    language, position, el("span", { class: "spacer" }), size,
+    el("span", { class: "editor-hint" }, [el("kbd", { text: "⌘S" }), " save"]),
+  ]);
   const placeholder = el("div", { class: "editor-placeholder" }, [
-    el("span", { class: "editor-placeholder-ico", "aria-hidden": "true", html: icon("fileText") }),
     el("strong", { text: emptyTitle }),
     el("span", { text: emptyBody }),
-    el("span", { class: "editor-keys" }, [
-      el("kbd", { text: "/" }), " filter  ", el("kbd", { text: "⌘S" }), " save  ", el("kbd", { text: "R" }), " refresh",
-    ]),
   ]);
 
   const element = el("div", { class: "editor" }, [head, placeholder]);
 
-  function renderLines(lines) {
-    const old = paintedLines;
-    if (!old.length || !layer.childElementCount) {
-      layer.innerHTML = lines.map((line) => `<div class="ln">${line}</div>`).join("");
-      paintedLines = lines;
-      currentLine = -1;
-      return;
-    }
-    // Replace only the changed middle; prefix and suffix lines keep their nodes.
-    let start = 0;
-    while (start < old.length && start < lines.length && old[start] === lines[start]) start += 1;
-    let endOld = old.length;
-    let endNew = lines.length;
-    while (endOld > start && endNew > start && old[endOld - 1] === lines[endNew - 1]) {
-      endOld -= 1;
-      endNew -= 1;
-    }
-    const nodes = layer.children;
-    const shared = Math.min(endOld, endNew) - start;
-    for (let index = 0; index < shared; index += 1) nodes[start + index].innerHTML = lines[start + index];
-    if (endOld - start > shared) {
-      for (let index = endOld - 1; index >= start + shared; index -= 1) nodes[index].remove();
-    } else if (endNew - start > shared) {
-      const fragment = document.createDocumentFragment();
-      for (let index = start + shared; index < endNew; index += 1) {
-        const node = document.createElement("div");
-        node.className = "ln";
-        node.innerHTML = lines[index];
-        fragment.append(node);
-      }
-      layer.insertBefore(fragment, nodes[start + shared] || null);
-    }
-    paintedLines = lines;
-    if (currentLine >= start) currentLine = -1;
-  }
-
-  function paintHighlight() {
-    cancelAnimationFrame(paintFrame);
-    paintFrame = 0;
-    const text = textarea.value;
-    if (text === paintedText) return;
-    paintedText = text;
-    layer.classList.toggle("is-plain", language === "plain" || text.length > HIGHLIGHT_LIMIT);
-    renderLines(highlight(text, language));
-    lineCount.textContent = `${paintedLines.length} line${paintedLines.length === 1 ? "" : "s"}`;
-    markCurrentLine();
-  }
-
-  function schedulePaint() {
-    if (textarea.value.length <= SYNC_PAINT_LIMIT) paintHighlight();
-    else if (!paintFrame) paintFrame = requestAnimationFrame(paintHighlight);
-  }
-
-  function caretLine() {
-    const upto = textarea.value.slice(0, textarea.selectionStart);
-    let count = 0;
-    for (let index = upto.indexOf("\n"); index >= 0; index = upto.indexOf("\n", index + 1)) count += 1;
-    return count;
-  }
-
-  function markCurrentLine() {
-    const focused = document.activeElement === textarea;
-    const index = focused ? caretLine() : -1;
-    if (index === currentLine && layer.children[index]?.classList.contains("cur")) return;
-    layer.querySelector(".ln.cur")?.classList.remove("cur");
-    currentLine = index;
-    if (index >= 0) layer.children[index]?.classList.add("cur");
-  }
-
-  // The layers grow with the text, so reveal the caret line in the outer scroller.
-  function revealCaret() {
-    const line = layer.children[caretLine()];
-    if (!line) return;
-    const view = body.getBoundingClientRect();
-    const box = line.getBoundingClientRect();
-    const margin = 24;
-    if (box.bottom > view.bottom - margin) body.scrollTop += box.bottom - view.bottom + margin;
-    else if (box.top < view.top + margin) body.scrollTop -= view.top + margin - box.top;
-  }
-
-  textarea.addEventListener("scroll", () => {
-    // The textarea is as tall as its text; a transient inner scroll would shear the layers.
-    if (textarea.scrollTop || textarea.scrollLeft) {
-      textarea.scrollTop = 0;
-      textarea.scrollLeft = 0;
-    }
-  });
-  textarea.addEventListener("focus", markCurrentLine);
-  textarea.addEventListener("blur", markCurrentLine);
-  document.addEventListener("selectionchange", () => {
-    if (document.activeElement !== textarea) return;
-    markCurrentLine();
-    refreshPosition();
-  });
-  textarea.addEventListener("keydown", (event) => {
-    if (event.key.startsWith("Arrow") || ["PageUp", "PageDown", "Home", "End", "Enter", "Backspace"].includes(event.key)) {
-      requestAnimationFrame(revealCaret);
-    }
-  });
   textarea.addEventListener("input", () => {
+    paintEdit();
     refreshFlags();
-    revealCaret();
   });
   textarea.addEventListener("keyup", refreshPosition);
   textarea.addEventListener("click", refreshPosition);
+  textarea.addEventListener("select", refreshPosition);
+  // Height follows the content, so the textarea itself must never scroll.
+  textarea.addEventListener("scroll", () => {
+    textarea.scrollTop = 0;
+    textarea.scrollLeft = 0;
+  });
   textarea.addEventListener("keydown", (event) => {
-    if (event.key === "Tab") {
+    if (event.key === "Tab" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
       event.preventDefault();
-      const start = textarea.selectionStart;
-      const end = textarea.selectionEnd;
-      textarea.setRangeText("  ", start, end, "end");
-      refreshFlags();
+      // execCommand keeps the native undo stack; setRangeText is the fallback.
+      const inserted = typeof document.execCommand === "function" && document.execCommand("insertText", false, "  ");
+      if (!inserted) {
+        textarea.setRangeText("  ", textarea.selectionStart, textarea.selectionEnd, "end");
+        paintEdit();
+        refreshFlags();
+      }
     }
   });
+
+  function rowsHtml(rows) {
+    let html = "";
+    for (const row of rows) html += `<div class="ln${row.cls ? ` ln-${row.cls}` : ""}">${row.html}</div>`;
+    return html;
+  }
+
+  function setDigits() {
+    code.style.setProperty("--digits", String(Math.max(2, String(model.count()).length)));
+  }
+
+  // Full highlight, used when a file opens or its text is replaced.
+  function paintAll() {
+    model.setLanguage(languageFor(current?.path));
+    language.textContent = current ? model.label() : "";
+    overlay.innerHTML = rowsHtml(model.reset(textarea.value));
+    currentLine = -1;
+    setDigits();
+  }
+
+  // Patch only the lines an edit changed.
+  function paintEdit() {
+    const patch = model.update(textarea.value);
+    const children = overlay.children;
+    for (let index = 0; index < patch.removed; index += 1) children[patch.start].remove();
+    if (patch.rows.length) {
+      const holder = document.createElement("div");
+      holder.innerHTML = rowsHtml(patch.rows);
+      const fragment = document.createDocumentFragment();
+      while (holder.firstChild) fragment.append(holder.firstChild);
+      overlay.insertBefore(fragment, children[patch.start] || null);
+    }
+    currentLine = -1;
+    setDigits();
+  }
 
   function isDirty() {
     return Boolean(current) && textarea.value !== baseline;
@@ -211,44 +139,46 @@ export function createEditor({ onSaved, onDeleted, onDirty, context = null, empt
   }
 
   function refreshPosition() {
-    const upto = textarea.value.slice(0, textarea.selectionStart);
-    const lines = upto.split("\n");
-    position.textContent = `Ln ${lines.length}, Col ${lines[lines.length - 1].length + 1}`;
+    const caret = textarea.selectionStart;
+    const value = textarea.value;
+    let line = 0;
+    let lineStart = 0;
+    for (let index = value.indexOf("\n"); index >= 0 && index < caret; index = value.indexOf("\n", index + 1)) {
+      line += 1;
+      lineStart = index + 1;
+    }
+    position.textContent = `Ln ${line + 1}, Col ${caret - lineStart + 1}`;
+    if (line !== currentLine) {
+      overlay.children[currentLine]?.classList.remove("cur");
+      overlay.children[line]?.classList.add("cur");
+      currentLine = line;
+    }
   }
 
   function refreshFlags() {
     const dirty = isDirty();
     saveButton.disabled = busy || !current || (!dirty && current.exists);
-    saveLabel.textContent = current && !current.exists ? "Create" : "Save";
+    saveButton.textContent = current && !current.exists ? "Create" : "Save";
     revertButton.disabled = busy || !dirty;
     deleteButton.disabled = busy || !current || !current.exists;
-    flag.hidden = !current || (!dirty && current.exists);
-    if (!flag.hidden) {
-      const isNew = current && !current.exists;
-      flag.className = `editor-flag ${isNew ? "new" : "dirty"}`;
-      flag.textContent = isNew ? (dirty ? "new · unsaved" : "new file") : "unsaved";
-    }
+    const isNew = Boolean(current && !current.exists);
+    flag.hidden = !current;
+    flag.className = `editor-flag${isNew ? " new" : dirty ? " dirty" : ""}`;
+    flagText.textContent = isNew ? (dirty ? "New file · unsaved" : "New file") : dirty ? "Unsaved changes" : "Saved";
     size.textContent = current ? formatBytes(new TextEncoder().encode(textarea.value).length) : "";
-    if (current) schedulePaint();
     refreshPosition();
     if (onDirty) onDirty(isDirty());
   }
 
   function showPane(hasFile) {
     clear(element);
-    // The item (Skill or instruction) is above the file, which is a part of it.
-    if (hasFile && context) element.append(context);
+    element.classList.toggle("is-empty", !hasFile);
     element.append(head);
     element.append(hasFile ? body : placeholder);
     if (hasFile) element.append(foot);
   }
 
   function setPath(path) {
-    language = languageFor(path);
-    languageLabel.textContent = path ? LANGUAGE_LABEL[language] : "";
-    paintedText = null;
-    paintedLines = [];
-    clear(layer);
     clear(pathLabel);
     if (!path) {
       pathLabel.append(document.createTextNode("—"));
@@ -258,7 +188,7 @@ export function createEditor({ onSaved, onDeleted, onDirty, context = null, empt
     }
     const [dir, name] = splitPath(path);
     if (dir) pathLabel.append(el("span", { class: "dir", text: dir }));
-    pathLabel.append(el("span", { class: "name", text: name }));
+    pathLabel.append(document.createTextNode(name));
     pathLabel.title = path;
     textareaLabel.textContent = `File editor for ${path}`;
   }
@@ -297,15 +227,13 @@ export function createEditor({ onSaved, onDeleted, onDirty, context = null, empt
     textarea.disabled = false;
     setPath(path);
     showPane(true);
+    paintAll();
     refreshFlags();
-    paintHighlight();
     textarea.focus({ preventScroll: true });
     // Assigning .value parks the caret at the end of the text; put it back at the
     // top so the pane opens on line 1 and the footer agrees with the caret.
     textarea.setSelectionRange(0, 0);
-    textarea.scrollTop = 0;
     body.scrollTop = 0;
-    markCurrentLine();
     refreshPosition();
     announce(`Opened ${path}`);
     return true;
@@ -320,6 +248,7 @@ export function createEditor({ onSaved, onDeleted, onDirty, context = null, empt
     textarea.disabled = true;
     setPath("");
     showPane(false);
+    paintAll();
     refreshFlags();
     return true;
   }
@@ -327,6 +256,7 @@ export function createEditor({ onSaved, onDeleted, onDirty, context = null, empt
   function revert() {
     if (!current) return;
     textarea.value = baseline;
+    paintAll();
     refreshFlags();
     textarea.focus();
     announce(`Reverted unsaved changes in ${current.path}`);
@@ -347,10 +277,10 @@ export function createEditor({ onSaved, onDeleted, onDirty, context = null, empt
     current = { path, exists, revision: file ? file.revision : null };
     baseline = content;
     textarea.value = content;
+    paintAll();
     refreshFlags();
     textarea.focus({ preventScroll: true });
     textarea.setSelectionRange(0, 0);
-    textarea.scrollTop = 0;
     body.scrollTop = 0;
     announce(file ? `Loaded latest ${path}` : `${path} no longer exists`);
   }
@@ -508,5 +438,6 @@ export function createEditor({ onSaved, onDeleted, onDirty, context = null, empt
     path: () => (current ? current.path : null),
     revision: () => (current ? current.revision : null),
     text: () => textarea.value,
+    focus: () => textarea.focus({ preventScroll: true }),
   };
 }

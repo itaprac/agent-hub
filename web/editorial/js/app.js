@@ -1,7 +1,7 @@
 // Bootstrap: top bar actions, tab routing, and store -> DOM rendering.
 
 import { api } from "./api.js";
-import { $, $$, formatTime, placeIndicators, toast } from "./dom.js";
+import { $, $$, formatTime, refreshAges, toast } from "./dom.js";
 import { adoptProjectField, formDialog, projectField } from "./modals.js";
 import { mountFleet, refreshFleet, renderFleet } from "./fleet.js";
 import { renderLog, renderStatusView, summarize } from "./status.js";
@@ -13,13 +13,14 @@ import { createLifecycle } from "./lifecycle.js";
 import { editAgents, showSkillTargets } from "./targets.js";
 import { isUsageLoading, mountUsage, refreshUsage, renderUsage } from "./usage.js";
 import { buildConfigTree, buildInstructionsTree, buildSkillsTree, createWorkspace } from "./workspace.js";
+import { recordAge } from "./fleet.js";
 
 const LOG_KEY = "agent-hub:log-open";
 const TABS = ["status", "usage", "skills", "instructions", "config"];
 const ALL_TABS = [...TABS, "settings"];
-const TAB_LABEL = { status: "Status", usage: "Usage", skills: "Skills", instructions: "Instructions", config: "Config", settings: "Settings" };
 
 let renderedState = null;
+let renderedStatus = null;
 
 function announce(message) {
   const live = $("#app-status");
@@ -141,19 +142,23 @@ function setupWorkspaces() {
   const lifecycle = createLifecycle({ runHub, refresh: afterEdit });
   workspaces.skills = createWorkspace($("#view-skills"), {
     title: "Skills",
+    layout: "cards",
+    itemIcon: "spark",
+    lede: skillsLede,
     buildTree: buildSkillsTree,
     buildContext: lifecycle.skillContext,
     onChanged: afterEdit,
     onDirty: paintDirty,
     actions: [
-      { label: "Install", icon: "down", title: "Install a skill from a source", run: installSkill },
-      { label: "Update", icon: "up", title: "Update installed skills", run: updateSkills },
-      { label: "New", icon: "plus", title: "agent-hub add-skill", run: newSkill },
-      { label: "Adopt", icon: "adopt", title: "agent-hub adopt", run: adoptSkill },
+      { label: "Adopt", title: "agent-hub adopt: move an existing skill directory into the Store", kind: "ghost", run: adoptSkill },
+      { label: "Update", title: "Update installed skills", kind: "ghost", run: updateSkills },
+      { label: "Install", title: "Install a skill from a source", icon: "down", run: installSkill },
+      { label: "New skill", title: "agent-hub add-skill", kind: "primary", icon: "plus", run: newSkill },
     ],
   });
   workspaces.instructions = createWorkspace($("#view-instructions"), {
     title: "Instructions",
+    lede: () => "One shared file, with per-agent overlays appended on each machine.",
     buildTree: buildInstructionsTree,
     buildContext: lifecycle.instructionContext,
     onChanged: afterEdit,
@@ -161,11 +166,21 @@ function setupWorkspaces() {
   });
   workspaces.config = createWorkspace($("#view-config"), {
     title: "Config",
+    itemIcon: "config",
+    lede: (state) => `Store settings shared by every machine · ${state.hub?.enabled ? `${state.hub.enabled.length} Agents` : "detected Agents"} · ${state.hub?.mode || "symlink"} mode`,
     buildTree: buildConfigTree,
     buildContext: configContext,
     onChanged: afterEdit,
     onDirty: paintDirty,
   });
+}
+
+function skillsLede(state) {
+  const count = (state.skills?.global?.length || 0)
+    + Object.values(state.skills?.projects || {}).reduce((sum, list) => sum + list.length, 0);
+  const machines = (state.machines || []).map((machine) => machine.machine);
+  const where = machines.length > 1 ? `across ${machines.slice(0, -1).join(", ")} and ${machines.at(-1)}` : machines.length ? `on ${machines[0]}` : "in this Store";
+  return `${count} skill${count === 1 ? "" : "s"} shared ${where}`;
 }
 
 function configContext(path, state) {
@@ -252,21 +267,25 @@ function setTab(tab) {
     if (tab === "settings") railSettings.setAttribute("aria-current", "page");
     else railSettings.removeAttribute("aria-current");
   }
+  for (const [name, workspace] of Object.entries(workspaces)) {
+    if (name === tab) workspace.activate();
+    else workspace.deactivate();
+  }
   for (const view of $$(".view")) view.hidden = view.dataset.view !== tab;
-  $("#crumb-view").textContent = TAB_LABEL[tab];
+  document.title = `${tab[0].toUpperCase()}${tab.slice(1)} · agent-hub`;
+  if (changed) window.scrollTo({ top: 0 });
   if (location.hash.slice(1) !== tab) history.replaceState(null, "", `#${tab}`);
   if (tab === "usage" && (changed || !store.usage) && !isUsageLoading()) refreshUsage();
-  requestAnimationFrame(() => placeIndicators());
 }
 
-const isLogOpen = () => $("#logbar").classList.contains("open");
-
-function setLogOpen(open, { focus = false } = {}) {
-  const wasOpen = isLogOpen();
+function setLogOpen(open) {
   $("#logbar").classList.toggle("open", open);
+  $("#logbar").hidden = !open;
   $("#log-toggle").setAttribute("aria-expanded", String(open));
-  if (focus && open && !wasOpen) $("#log-close").focus();
-  else if (focus && !open && wasOpen && $("#log-drawer").contains(document.activeElement)) $("#log-toggle").focus();
+  if (open) {
+    const body = $("#log-body");
+    body.scrollTop = body.scrollHeight;
+  }
   try {
     localStorage.setItem(LOG_KEY, open ? "1" : "0");
   } catch (error) {
@@ -278,15 +297,8 @@ function renderChrome(snapshot) {
   const state = snapshot.state;
   $("#machine-id").textContent = state ? state.machine_id : "—";
   $("#machine-host").textContent = state ? state.hostname : "—";
-  $("#repo-path").textContent = state ? state.repo : "";
-  $("#repo-path").title = state ? `Store: ${state.repo}` : "";
-  $("#repo-path").hidden = !state;
-  const skills = state ? (state.skills?.global || []).length
-    + Object.values(state.skills?.projects || {}).reduce((sum, list) => sum + list.length, 0) : 0;
-  $("#count-skills").textContent = state ? String(skills) : "";
-  $("#count-instructions").textContent = state ? String((state.instructions?.global || []).filter((entry) => entry.exists).length) : "";
-  const problems = snapshot.status ? summarize(snapshot.status).problems : 0;
-  $("#machine-chip").dataset.tone = !snapshot.status ? "idle" : problems || snapshot.status.exit_code ? "bad" : "ok";
+  $("#machine-chip").title = state ? `Store: ${state.repo}` : "";
+  $("#log-toggle").classList.toggle("has-error", Boolean(snapshot.log && snapshot.log.exit_code !== 0));
 
   const banner = $("#banner");
   const messages = snapshot.stateError ? [`configuration error: ${snapshot.stateError}`] : state?.warnings || [];
@@ -305,12 +317,12 @@ function render(snapshot) {
   renderUsage(snapshot);
   renderSettings(snapshot);
   renderLog(snapshot.log);
-  if (snapshot.state !== renderedState) {
+  if (snapshot.state !== renderedState || snapshot.status !== renderedStatus) {
     renderedState = snapshot.state;
-    for (const workspace of Object.values(workspaces)) workspace.render(snapshot.state);
+    renderedStatus = snapshot.status;
+    for (const workspace of Object.values(workspaces)) workspace.render(snapshot.state, snapshot.status);
   }
   paintDirty();
-  requestAnimationFrame(() => placeIndicators());
 }
 
 // ------------------------------------------------------------------ boot
@@ -320,8 +332,8 @@ function wire() {
   $("#btn-refresh").addEventListener("click", () => withBusy(() => refreshEverything({ log: true })));
 
   const tabs = $$(".tab");
-  const tablist = $(".rail-nav");
-  const mobileTabs = window.matchMedia("(max-width: 600px)");
+  const tablist = $(".nav");
+  const mobileTabs = window.matchMedia("(max-width: 720px)");
   const syncTabOrientation = () => {
     tablist.setAttribute("aria-orientation", mobileTabs.matches ? "horizontal" : "vertical");
   };
@@ -347,12 +359,14 @@ function wire() {
     tabs[next].focus();
   });
 
-  $("#log-toggle").addEventListener("click", () => setLogOpen(true, { focus: true }));
-  $("#log-close").addEventListener("click", () => setLogOpen(false, { focus: true }));
-  window.addEventListener("resize", () => placeIndicators());
+  $("#log-toggle").addEventListener("click", () => setLogOpen($("#logbar").hidden));
+  $("#log-close").addEventListener("click", () => {
+    setLogOpen(false);
+    $("#log-toggle").focus();
+  });
 
-  // The active class is painted by renderStatusView off the store.
-  for (const button of $$("#status-filter .seg")) {
+  // The active state is painted by renderStatusView off the store.
+  for (const button of $$("#status-filter button")) {
     button.addEventListener("click", () => update({ filter: button.dataset.filter }));
   }
 
@@ -365,13 +379,18 @@ function wire() {
       return;
     }
     if (event.key === "Escape") {
-      if (isLogOpen() && !document.querySelector("dialog[open]") && !event.target.closest?.(".theme-picker")) {
-        const inEditor = event.target.tagName === "TEXTAREA" || event.target.tagName === "INPUT";
-        if (!inEditor || $("#log-drawer").contains(event.target)) {
-          setLogOpen(false, { focus: true });
-          event.preventDefault();
-          return;
-        }
+      if (document.querySelector("dialog[open]")) return;
+      const workspace = workspaces[store.tab];
+      if (workspace?.isSheetOpen()) {
+        event.preventDefault();
+        workspace.closeSheet();
+        return;
+      }
+      if (!$("#logbar").hidden && !(event.target.closest && event.target.closest(".theme-picker"))) {
+        event.preventDefault();
+        setLogOpen(false);
+        $("#log-toggle").focus();
+        return;
       }
       const search = document.querySelector(".view:not([hidden]) .search");
       if (search && document.activeElement === search) {
@@ -386,10 +405,11 @@ function wire() {
       return;
     }
     if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (workspaces[store.tab]?.isSheetOpen() || document.querySelector("dialog[open]")) return;
     const index = Number(event.key);
     if (index >= 1 && index <= TABS.length) setTab(TABS[index - 1]);
     else if (event.key.toLowerCase() === "r") withBusy(() => refreshEverything({ log: true }));
-    else if (event.key.toLowerCase() === "l") setLogOpen(!isLogOpen(), { focus: $("#log-drawer").contains(event.target) });
+    else if (event.key.toLowerCase() === "l") setLogOpen($("#logbar").hidden);
     else if (event.key === "/") {
       const search = document.querySelector(".view:not([hidden]) .search");
       if (search) {
@@ -412,7 +432,7 @@ function wire() {
 
 async function boot() {
   mountTheme();
-  mountLayoutSwitch("workbench");
+  mountLayoutSwitch("editorial");
 
   let logOpen = false;
   try {
@@ -430,6 +450,8 @@ async function boot() {
   setLogOpen(logOpen);
   setTab(location.hash.slice(1) || "status");
   render(store);
+  // Relative times ("checked 2m ago") stay current without a full re-render.
+  setInterval(() => refreshAges(recordAge), 30000);
 
   await withBusy(() => refreshEverything({ log: true }));
 }

@@ -58,15 +58,17 @@ typography:
     lineHeight: 1.65
     letterSpacing: "normal"
   label:
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
-    fontSize: "11px"
-    fontWeight: 600
-    lineHeight: 1.45
-    letterSpacing: "0.14em"
+    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
+    fontSize: "12px"
+    fontWeight: 500
+    lineHeight: 1.4
+    letterSpacing: "normal"
 rounded:
-  xs: "6px"
-  sm: "8px"
-  md: "10px"
+  xs: "8px"
+  sm: "10px"
+  md: "12px"
+  card: "14px"
+  canvas: "16px"
   pill: "999px"
 spacing:
   xs: "4px"
@@ -106,156 +108,66 @@ components:
   machine-surface-dark:
     backgroundColor: "{colors.dark-surface}"
     textColor: "{colors.dark-text}"
-    rounded: "{rounded.md}"
-    padding: "16px 18px 14px"
+    rounded: "{rounded.card}"
+    padding: "20px 22px 18px"
   machine-surface-light:
     backgroundColor: "{colors.light-surface}"
     textColor: "{colors.light-text}"
-    rounded: "{rounded.md}"
-    padding: "16px 18px 14px"
+    rounded: "{rounded.card}"
+    padding: "20px 22px 18px"
 ---
 
 # Design System: agent-hub
 
 ## Overview
 
-**Creative North Star: "The Maintainer's Workbench"**
+**Creative North Star: "The Soft Workbench"**
 
-agent-hub is a compact work surface for focused repository maintenance. Its visual hierarchy is quiet, technical, and evidence-led. Warm olive neutrals reduce glare, copper marks deliberate primary actions, and semantic colors report real state only.
+agent-hub is a calm work surface for repository maintenance. The navigation sits directly on the rail colour; all content lives in one inset, rounded canvas panel with a slim header (breadcrumb, Store path pill, Refresh with its `R` hint, colour-scheme menu). Warm olive neutrals reduce glare, copper marks the primary action, focus, and selection, and semantic colours report real state only. The approved reference is `prototypes/a-soft-workbench.html` in the main checkout.
 
-The desktop layout stays dense for repeated operation. At 1000px and below, interactive targets become 44px high. At 600px and below, navigation moves to a full-width top rail, workspaces stack, editor actions receive their own row, and wide data tables scroll inside their section. Dark, Light, Black, and System modes are equal operating environments.
+Dark, Light, Black, and System are equal operating environments.
 
-**Key Characteristics:**
+**Key characteristics:**
 
-- Restrained color with one copper action accent.
-- System sans for controls and system mono for state, paths, and data.
-- Tonal layers and one-pixel borders before shadows.
-- Structural responsive changes at 1000px, 860px, and 600px.
-- Visible focus, reduced motion support, and 44px touch targets on narrow or coarse-pointer devices.
+- Sans-serif, sentence-case interface. Mono only for paths, hashes, numbers in tables, commands, and code. No uppercase letter-spaced labels.
+- Cards: 14px radius, a one-pixel ring, and a very soft drop. Floating layers (menus, tooltips, log drawer, dialogs) use the pop shadow.
+- Segmented controls are pills with a sliding indicator (`dom.js placeIndicators`).
+- Structural responsive changes at 1180px, 1000px (68px icon rail, stacked workspace), 860px, and 600px (top navigation, stacked editor actions).
+- Visible copper focus rings, reduced-motion support, 44px targets at ≤1000px or with a coarse pointer.
 
 ## Colors
 
-The palette is warm olive ink and paper, with copper reserved for actions and selection. The frontmatter values are sRGB exports for Stitch. Canonical implementation values remain OKLCH in `web/style.css` and in the sidecar metadata.
+Canonical values are OKLCH in `web/style.css`; the frontmatter holds sRGB exports.
 
-### Primary
+- **Layers:** `--rail` (sidebar and page) → `--canvas` (inset panel) → `--card` / `--card-2` (cards, raised controls) → `--sunken` (inputs, log, gutters). Black keeps rail and canvas at pure black and lifts cards slightly (ADR 0001).
+- **Text:** `--text`, `--muted`, `--faint`, `--dim`. The weakest level keeps 4.5:1 on its hardest surface.
+- **Copper** (`--accent`): primary button, focus ring, selected tree item, active nav icon, loading bar. Below 10% of a screen.
+- **State:** `--green` synced/ok, `--yellow` drift/waiting/unsaved, `--red` errors and destructive actions. Each has a `-soft` fill for badges and row tints.
+- **Brands in charts:** `--usage-claude` (orange), `--usage-codex` (neutral ink), `--usage-grok`, `--usage-cursor`.
+- **Syntax:** `--syn-key`, `--syn-str`, `--syn-num`, `--syn-link`, `--syn-head`, `--syn-pre`. Warm, low chroma, never state colours.
 
-- **Workbench Copper** (`dark-copper`, `light-copper`): primary buttons, focus rings, active file metadata, and loading progress.
-
-### Secondary
-
-- **Verified Green** (`success-dark`, `success-light`): healthy machine and successful operation state only.
-- **Attention Ochre** (`warning-dark`, `warning-light`): drift, unsaved work, or incomplete state only.
-- **Failure Red** (`danger-dark`, `danger-light`): errors, destructive actions, and failed state only.
-
-### Neutral
-
-- **Olive Ink Canvas** (`dark-canvas`, `dark-rail`, `dark-surface`, `dark-sunken`): Dark colour scheme page, navigation, panels, and recessed editor areas.
-- **Olive Paper Canvas** (`light-canvas`, `light-rail`, `light-surface`, `light-sunken`): the equivalent Light colour scheme layers.
-- **Black Canvas** (`black-canvas`, `black-rail`, `black-surface`, `black-sunken`): Black colour scheme page and rail. Pure black is allowed here only. Cards, panels, and recessed surfaces stay slightly lighter and keep the olive tint. See `docs/adr/0001-black-canvas-pure-black.md`.
-- **Evidence Text** (`dark-text`, `light-text`): headings, values, and operational verdicts.
-- **Supporting Text** (`dark-muted`, `dark-faint`, `dark-dim`, `light-muted`, `light-faint`, `light-dim`): three accessible hierarchy levels. The weakest level remains at least 4.5:1 against its hardest intended surface.
-
-### Named Rules
-
-**The Evidence Color Rule.** Green, yellow, and red must encode machine or operation state. They must never decorate neutral content.
-
-**The Copper Restraint Rule.** Copper is limited to primary actions, focus, current selection, and loading. It must remain below 10% of a screen.
-
-**The Black Canvas Rule.** Only the Black colour scheme may use pure black, and only on the page and rail canvas. Cards, panels, and recessed surfaces stay slightly lighter with the olive tint. Copper and status colors do not change. System never resolves to Black.
+**The Evidence Color Rule.** Green, yellow, and red encode state only. **The Copper Restraint Rule.** Copper is for action, focus, and selection only. **The Black Canvas Rule.** Pure black only on Black's rail and canvas; System never resolves to Black.
 
 ## Typography
 
-**Display Font:** System sans (`headline`)
-**Body Font:** System sans (`body`)
-**Label/Mono Font:** System monospace (`code`, `label`)
-
-**Character:** Native system type keeps controls familiar and fast. Monospace text identifies paths, commands, status metadata, and editable content without turning the product into decorative terminal cosplay.
-
-### Hierarchy
-
-- **Headline** (`headline`): page titles only. It steps down from 28px to 24px below 860px and to 30px only for the narrow usage total.
-- **Title** (`title`): machine names, modal titles, and strong empty-state labels.
-- **Body** (`body`): controls and explanations. Prose must stay within 65 to 75 characters per line when a prose block exists.
-- **Code** (`code`): editor content and logs. Preserve a relaxed 1.65 line height for scanning.
-- **Label** (`label`): short uppercase section labels and metadata. Do not use it for sentences.
-
-### Named Rules
-
-**The Evidence Type Rule.** Sans explains the interface. Mono shows state, identity, commands, paths, and data.
-
-## Elevation
-
-The interface is flat by default. Depth comes from adjacent tonal layers and one-pixel borders. The single ambient shadow belongs to floating dialogs, toasts, and chart tooltips. Small semantic glows may reinforce status dots in dark mode, but they must not spread to cards or controls.
-
-### Shadow Vocabulary
-
-- **Floating Surface** (`shadow`): a broad, low-edge shadow for dialogs, toasts, and tooltips only.
-- **Status Glow** (`glow-ok`, `glow-warn`, `glow-bad`): a compact dark-mode halo around a state dot. Light mode disables it.
-
-### Named Rules
-
-**The Flat Workbench Rule.** Resting panels have no shadow. If a normal card looks lifted, remove the shadow and restore tonal separation.
+- **Headline** 28px/600, −0.028em: page verdicts and page titles (24px below 860px).
+- **Title** 15–20px/600: section and workspace titles, machine names, modal titles.
+- **Body** 13–14px sans: controls and explanations. Small labels are 12px sans, weight 500, sentence case.
+- **Code** 13px/1.7 mono: editor, log, paths, commit hashes, file sizes.
 
 ## Components
 
-Components use familiar shapes, direct labels, visible state changes, and compact desktop dimensions.
-
-### Buttons
-
-- **Shape:** gently curved (`sm`), 32px high on pointer-precise desktop and at least 44px high at narrow widths or with a coarse pointer.
-- **Primary:** Workbench Copper with matching ink text and 12px horizontal padding.
-- **Hover / Focus:** hover preserves the AA color pair and adds an ink-colored border; focus uses a two-pixel copper outline with a two-pixel offset.
-- **Secondary / Danger:** transparent neutral buttons use one-pixel borders. Danger uses Failure Red for text and border, with a soft red hover surface.
-
-### Chips
-
-- **Style:** pill radius, one-pixel border, semantic dot, and compact mono label.
-- **State:** color names real state. A chip must not rely on color alone; its text carries the verdict.
-
-### Cards / Containers
-
-- **Corner Style:** gently curved (`md`).
-- **Background:** surface tokens separate content from the canvas.
-- **Shadow Strategy:** flat at rest.
-- **Border:** one pixel only. Colored side stripes greater than one pixel are prohibited.
-- **Internal Padding:** 16px to 18px on desktop and 12px to 14px below 600px.
-
-### Inputs / Fields
-
-- **Style:** recessed surface, one-pixel neutral border, `sm` radius, and mono content.
-- **Focus:** two-pixel copper outline with a one-pixel offset.
-- **Error / Disabled:** `aria-invalid` fields keep a two-pixel Failure Red focus ring and error copy uses the same semantic color. Disabled controls may reduce opacity because WCAG contrast does not apply to inactive controls.
-
-### Navigation
-
-- **Desktop:** a 236px left rail with labeled tabs. It collapses to a 68px icon rail below 1000px.
-- **Mobile:** below 600px, five equal 44px navigation targets form a top rail. No destination is removed.
-- **State:** inactive tabs use supporting text. Hover and selection use a neutral tonal fill; selection does not depend on a colored stripe.
-
-### Editor
-
-- **Desktop:** file path, state flag, and actions share a 46px header.
-- **Mobile:** the path and state occupy the first row; Revert, Delete, and Save occupy three equal 44px targets on the second row.
-- **Content:** the editor is a recessed mono surface. Its footer keeps cursor position, size, and save hint visible.
+- **Buttons:** 32px (28px `btn-sm`, 38px `btn-lg`), 10px radius. Primary is copper with ink text. Ghost buttons are transparent until hover. Danger uses red text and a soft red hover.
+- **Tags / badges:** 20px pills; neutral ring by default, soft fills for ok, warn, accent, and an outline for off.
+- **Status:** verdict header with a state badge, meta line (Store rev, machine count, automatic sync), and Sync. Machine cards show state, confirmation age, a facts strip (commit, last sync, recorded, app), agent chips, dry-run switch, and per-machine Sync / Apply. Local checks are one card, grouped by Agent, with an All / Issues filter that appears only when there are issues.
+- **Usage:** hero cost with by-machine bars, per-tool rows with share bars and source warnings, five KPI tiles, smooth area chart (monotone curves, peak label, hover and keyboard crosshair with tooltip), and a breakdown table by model or by period.
+- **Workspaces:** 320px tree pane (title with count, actions, filter with `/` hint, grouped tree with icons, badges, provenance) beside the editor card. The context bar above the editor carries item actions (Targets, Disable, Back up…).
+- **Editor:** the `<textarea>` stays the real input with transparent text over a highlighted `<pre>` that wraps identically; both grow inside one scroll container, so no scroll syncing is needed. Line numbers are CSS counters in the gutter; the caret line is tinted. Markdown, TOML, JSON, YAML, shell, and Python are highlighted line by line with memoised state; only changed lines are re-rendered, and files above 400 kB show plain text.
+- **Log:** a pill at the bottom right (command, exit code, `L`) that expands into a drawer; `L` or Escape closes it.
+- **Dialogs, menus, tooltips, toasts:** `--panel` surface with the pop shadow; toasts are inverted pills at the bottom centre.
 
 ## Do's and Don'ts
 
-### Do:
+**Do** show state with text, counts, and exact paths; keep all five destinations, Refresh, theme, filtering, editor actions, Apply, and Sync reachable at 320px; keep AA contrast on every small text role; respect reduced motion.
 
-- **Do** show repository state and consequences with text, counts, and exact paths.
-- **Do** keep desktop controls compact, then expand interactive targets to at least 44px on narrow or coarse-pointer devices.
-- **Do** preserve all five navigation destinations at 320px, 375px, and 768px.
-- **Do** use one-pixel borders, tonal surfaces, and the documented radius scale.
-- **Do** keep every small active text role at WCAG 2.2 AA contrast.
-
-### Don't:
-
-- **Don't** build generic SaaS dashboards.
-- **Don't** use decorative terminal cosplay.
-- **Don't** use neon-on-black AI tooling.
-- **Don't** use glassmorphism.
-- **Don't** use metric-heavy hero layouts.
-- **Don't** add visual effects that compete with repository state.
-- **Don't** add custom scrollbars, pure white, gradient text, or colored side stripes greater than one pixel.
-- **Don't** use pure black except the Black colour scheme page and rail canvas.
-- **Don't** hide Refresh, theme selection, navigation, editor actions, filtering, Apply, or Sync to make a narrow layout fit.
+**Don't** use uppercase letter-spaced labels, mono for prose, glassmorphism, neon, gradient text, pure white, colored side stripes wider than one pixel, custom scrollbars, or pure black outside the Black scheme.

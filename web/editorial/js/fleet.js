@@ -1,7 +1,6 @@
 // Fleet reads Store records. Configured machines can receive explicit commands.
 import { api } from "./api.js";
-import { $, clear, el, formatTime } from "./dom.js";
-import { icon } from "./icons.js";
+import { $, $$, clear, el, formatTime } from "./dom.js";
 import { store, update } from "./store.js";
 
 export function createFleetController({ request, publish = () => {}, render = () => {},
@@ -100,20 +99,25 @@ export function machineState(machine) {
   };
 }
 
-function fact(key, value, { mono = false, title = value } = {}) {
-  return el("div", { class: "fact" }, [
+const ICON = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const openMachines = new Set();
+
+function deviceIcon(machine) {
+  const name = `${machine.machine || ""} ${machine.hostname || ""}`;
+  return /book|air|laptop|notebook/i.test(name) ? "laptop" : "desktop";
+}
+
+function fact(key, value, { mono = false, title = null } = {}) {
+  return el("div", {}, [
     el("dt", { text: key }),
-    el("dd", { class: mono ? "mono" : "", text: value, title }),
+    el("dd", { class: mono ? "mono" : null, text: value, title: title || value }),
   ]);
 }
 
-function syncedTime(value) {
-  const date = new Date(value);
-  if (!value || Number.isNaN(date.getTime())) return "not recorded";
-  const sameDay = date.toDateString() === new Date().toDateString();
-  return sameDay
-    ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : date.toLocaleDateString([], { month: "short", day: "numeric" });
+function formatWhen(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "not recorded";
+  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
 function card(machine, view) {
@@ -122,9 +126,11 @@ function card(machine, view) {
   const controllable = machine.local || machine.remote_control === true;
   const active = view.running?.machine === target;
   const checkboxId = machine.local ? "dry-run" : `dry-run-${machine.machine}`;
+  const detailId = `machine-detail-${String(machine.machine).replace(/[^\w-]/g, "_")}`;
+  const open = openMachines.has(machine.machine);
   const commands = controllable ? ["sync", "apply"].map((command) => el("button", {
-    class: `btn btn-sm${command === "sync" ? "" : " btn-ghost"}`,
     type: "button",
+    class: `btn${command === "sync" ? "" : " ghost"}`,
     disabled: view.controlsDisabled,
     title: !machine.local && command === "sync" && !view.dryRun
       ? `Publish this Store, sync on ${machine.machine}, then refresh its record`
@@ -133,46 +139,56 @@ function card(machine, view) {
   }, [active && view.running?.command === command ? el("span", { class: "spin", "aria-hidden": "true" }) : null,
     `${view.dryRun ? "Dry " : ""}${command[0].toUpperCase()}${command.slice(1)}`])) : [];
   const confirmed = machine.confirmedAt
-    ? `Confirmed ${recordAge(Math.max(0, (Date.now() - Date.parse(machine.confirmedAt)) / 1000))}`
-    : "No confirmed sync yet";
-  const host = machine.hostname ? machine.hostname.replace(/\.local$/, "") : "";
+    ? el("span", { class: "when", "data-ago": machine.confirmedAt, "data-ago-prefix": "Confirmed ",
+      text: `Confirmed ${recordAge(Math.max(0, (Date.now() - Date.parse(machine.confirmedAt)) / 1000))}` })
+    : el("span", { class: "when", text: "Not confirmed" });
   const agents = machine.agents || [];
-  return el("article", { class: `fleet${machine.local ? " is-local" : ""}` }, [
-    el("div", { class: "fleet-head" }, [
-      el("span", { class: "fleet-ico", "aria-hidden": "true", html: icon(machine.local ? "desktop" : "laptop") }),
-      el("span", { class: "fleet-id" }, [
-        el("span", { class: "fleet-name", text: machine.machine }),
-        el("span", { class: "fleet-host", text: host || (machine.local ? "this machine" : "remote machine") }),
+  return el("article", { class: `mrow fleet${machine.local ? " is-local" : ""}${open ? " open" : ""}` }, [
+    el("button", {
+      type: "button",
+      class: "mrow-head",
+      "aria-expanded": String(open),
+      "aria-controls": detailId,
+      onClick: (event) => {
+        const row = event.currentTarget.closest(".mrow");
+        const now = !row.classList.contains("open");
+        if (now) openMachines.add(machine.machine);
+        else openMachines.delete(machine.machine);
+        row.classList.toggle("open", now);
+        event.currentTarget.setAttribute("aria-expanded", String(now));
+      },
+    }, [
+      el("span", { class: "device", html: ICON(deviceIcon(machine)) }),
+      el("span", { class: "mrow-id" }, [
+        el("span", { class: "mname" }, [
+          el("span", { class: "fleet-name", text: machine.machine }),
+          machine.local ? el("span", { class: "tag", text: "This machine" }) : null,
+        ]),
+        el("span", { class: "msub", text: machine.hostname || (machine.local ? "this machine" : "no record yet") }),
       ]),
-      machine.local
-        ? el("span", { class: "fleet-tag is-local", text: "This machine" })
-        : el("span", { class: "fleet-tag", text: machine.remote_control === true ? "Remote · SSH" : "Remote" }),
+      el("span", { class: `state s-${state.tone}` }, [
+        el("span", { class: "dot", "aria-hidden": "true" }),
+        el("span", { text: state.word }),
+        state.rest ? el("span", { class: "x", text: ` · ${state.rest}` }) : null,
+      ]),
+      confirmed,
+      el("span", { class: "chev", html: ICON("chev") }),
     ]),
-    el("div", { class: `fleet-state s-${state.tone}` }, [
-      el("span", { class: `fleet-dot d-${state.tone}`, "aria-hidden": "true" }),
-      el("em", { text: state.word }),
-      el("span", { class: "x", text: state.rest ? ` · ${state.rest}` : "" }),
-    ]),
-    el("span", { class: "fleet-when", text: confirmed }),
-    machine.lastOutcome?.detail ? el("p", { class: "fleet-error", text: machine.lastOutcome.detail }) : null,
-    el("dl", { class: "fleet-facts" }, [
-      fact("Commit", typeof machine.head === "string" ? machine.head.slice(0, 7) : "not recorded", {
-        mono: typeof machine.head === "string",
-        title: typeof machine.head === "string" ? machine.head : "not recorded",
-      }),
-      fact("Last sync", recordAge(machine.age_seconds)),
-      fact("Recorded", syncedTime(machine.synced_at), { title: machine.synced_at || "not recorded" }),
-      fact("App", machine.app || "—", { mono: Boolean(machine.app) }),
-    ]),
-    view.error ? el("div", { class: "fleet-error", role: "alert", text: `Last command failed: ${view.error}` }) : null,
-    el("div", { class: "fleet-foot" }, [
-      el("div", { class: "agent-chips", "aria-label": "Agents" }, agents.length
-        ? agents.map((agent) => el("span", { class: `agent-chip a-${agent}` }, [
-          el("span", { class: "sw", "aria-hidden": "true" }), agent,
-        ]))
-        : [el("span", { class: "agent-chip is-empty", text: "No Agents recorded" })]),
+    el("div", { class: "expand", id: detailId }, [el("div", { class: "expand-inner" }, [el("div", { class: "detail" }, [
+      machine.lastOutcome?.detail ? el("p", { class: "fleet-error", text: machine.lastOutcome.detail }) : null,
+      el("dl", { class: "facts" }, [
+        el("div", {}, [
+          el("dt", { text: "Agents" }),
+          el("dd", {}, agents.length ? agents.map((agent) => el("span", { class: "chip", text: agent })) : [el("span", { text: "not recorded" })]),
+        ]),
+        fact("Last sync", recordAge(machine.age_seconds), { title: machine.synced_at || "not recorded" }),
+        fact("Recorded", machine.synced_at ? formatWhen(machine.synced_at) : "not recorded"),
+        fact("Commit", typeof machine.head === "string" ? machine.head.slice(0, 12) : "not recorded", { mono: true, title: machine.head || "" }),
+        machine.os || machine.app ? fact("System", [machine.os, machine.app && `agent-hub ${machine.app}`].filter(Boolean).join(" · ")) : null,
+      ]),
+      view.error ? el("div", { class: "fleet-error", role: "alert", text: `Last command failed: ${view.error}` }) : null,
       controllable ? el("div", { class: "fleet-controls" }, [
-        active ? el("span", { class: "sec-note", role: "status", text: `${view.running.command === "apply" ? "Apply" : "Sync"} on ${machine.machine}…` }) : null,
+        el("div", { class: "fleet-actions" }, commands),
         el("label", { class: "switch", title: `Run Apply and Sync with --dry-run on ${machine.machine}` }, [
           el("input", { type: "checkbox", id: checkboxId, checked: view.dryRun, disabled: view.controlsDisabled,
             onChange: (event) => {
@@ -184,10 +200,21 @@ function card(machine, view) {
           el("span", { class: "sw", "aria-hidden": "true" }),
           el("span", { text: "Dry run" }),
         ]),
-        el("div", { class: "fleet-actions" }, commands),
-      ]) : el("p", { class: "sec-note fleet-nocontrol", text: "Remote control is not configured." }),
-    ]),
+        active ? el("span", { class: "sec-note", role: "status", text: `${view.running.command === "apply" ? "Apply" : "Sync"} on ${machine.machine}…` }) : null,
+      ]) : el("p", { class: "sec-note", text: "Remote control is not configured." }),
+    ])])]),
   ]);
+}
+
+function verdictSentence({ running, fleetError, loading, attention, pendingChanges, waiting, unverified }) {
+  if (running) return "Syncing machines…";
+  if (fleetError) return "Machine records are unavailable.";
+  if (loading) return "Checking machines…";
+  if (attention) return `${attention} machine${attention === 1 ? " needs" : "s need"} attention.`;
+  if (pendingChanges) return "Store changes are waiting to sync.";
+  if (waiting) return `${waiting} machine${waiting === 1 ? " is" : "s are"} waiting for sync.`;
+  if (unverified) return "Sync is not confirmed yet.";
+  return "Everything is in sync.";
 }
 
 export function renderFleet(snapshot) {
@@ -212,48 +239,80 @@ export function renderFleet(snapshot) {
   }
   const waiting = machines.filter((machine) => machineState(machine).tone !== "ok");
   const running = controller.view().running;
-  const problem = snapshot.fleetError || machines.some((machine) => machine.error || machine.problems > 0);
+  const attention = machines.filter((machine) => machine.error || machine.problems > 0).length;
+  const problem = snapshot.fleetError || attention > 0;
   const unverified = !git?.remote || !records.length;
-  const firstLoad = Boolean(snapshot.fleetLoading) && !records.length && !snapshot.fleetError;
-  const verdict = running ? "Syncing machines…" : firstLoad ? "Reading Machine records…" : problem ? "Sync needs attention"
+  const verdict = running ? "Syncing machines…" : problem ? "Sync needs attention"
     : pendingChanges ? "Changes need syncing" : waiting.length ? `${waiting.length} machine${waiting.length === 1 ? "" : "s"} waiting for sync`
     : unverified ? "Sync not confirmed" : "All machines synced";
   const pill = $("#fleet-verdict");
-  pill.className = `pill pill-${firstLoad ? "idle" : problem ? "bad" : waiting.length || pendingChanges || unverified ? "idle" : "ok"}`;
+  pill.className = `pill pill-${problem ? "bad" : waiting.length || pendingChanges || unverified ? "idle" : "ok"}`;
   pill.title = "Latest known Machine records";
   pill.setAttribute("role", "status");
   $("#fleet-verdict-text").textContent = verdict;
-  $("#fleet-meta").textContent = snapshot.fleet?.automatic_sync ? "Automatic sync every 10 min" : "Automatic sync is off";
-  const rev = $("#fleet-rev");
-  if (rev) {
-    clear(rev);
-    const head = git?.head?.short;
-    if (head) rev.append("Store at ", el("code", { class: "mono", text: head, title: git.head.subject || head }));
-    rev.hidden = !head;
+
+  const headline = $("#status-verdict");
+  if (headline) {
+    headline.textContent = verdictSentence({
+      running, fleetError: snapshot.fleetError, loading: snapshot.fleetLoading && !snapshot.fleet,
+      attention, pendingChanges, waiting: waiting.length, unverified,
+    });
+    headline.className = problem ? "is-bad" : "";
   }
-  const count = $("#fleet-count");
-  if (count) count.textContent = machines.length ? `${machines.length} machine${machines.length === 1 ? "" : "s"}` : "";
+  const lede = $("#status-lede");
+  if (lede) {
+    clear(lede);
+    const count = machines.length;
+    const parts = [el("span", { text: `${count} machine${count === 1 ? "" : "s"}` })];
+    if (git?.head?.short) parts.push(el("span", {}, ["Store ", el("span", { class: "mono", text: git.head.short, title: git.head.subject || "" })]));
+    if (snapshot.status?.checked_at) {
+      parts.push(el("span", {
+        "data-ago": snapshot.status.checked_at, "data-ago-prefix": "checked ",
+        text: `checked ${recordAge(Math.max(0, (Date.now() - Date.parse(snapshot.status.checked_at)) / 1000))}`,
+      }));
+    }
+    parts.forEach((part, index) => {
+      if (index) lede.append(el("span", { class: "sep", "aria-hidden": "true", text: "·" }));
+      lede.append(part);
+    });
+  }
+
+  $("#fleet-meta").textContent = snapshot.fleet?.automatic_sync ? "Syncs automatically every 10 min" : "Automatic sync is off";
   const sync = $("#sync-all");
   if (sync) {
     sync.disabled = controller.view({ busy: snapshot.busy }).controlsDisabled;
-    clear(sync);
-    sync.append(el("span", { "aria-hidden": "true", class: running ? "spin" : "btn-ico", html: running ? "" : icon("sync") }), running ? "Syncing…" : "Sync");
+    sync.classList.toggle("is-running", Boolean(running));
+    const label = sync.querySelector(".sync-label");
+    if (label) label.textContent = running ? "Syncing…" : "Sync";
+    sync.title = "Sync every configured machine";
     sync.onclick = () => controller.run("sync-all");
   }
-  const grid = clear($("#fleet-grid"));
+  const grid = $("#fleet-grid");
+  const focusKey = grid.contains?.(document.activeElement) ? focusSignature(document.activeElement) : null;
+  clear(grid);
   if (snapshot.fleetError) grid.append(el("div", {
     class: "fleet-error fleet-error-block", role: "alert", text: `Fleet unavailable: ${snapshot.fleetError}`,
   }));
-  if (firstLoad) {
-    for (let index = 0; index < 2; index += 1) grid.append(el("div", { class: "fleet fleet-skel", "aria-hidden": "true" }, [
-      el("span", { class: "skel skel-head" }), el("span", { class: "skel skel-state" }), el("span", { class: "skel skel-facts" }),
-    ]));
-    return;
-  }
   if (!records.length && !snapshot.fleetError) grid.append(el("div", {
-    class: "tree-empty", text: "No Machine records yet. Run sync to create this machine’s record.",
+    class: "tree-empty", text: snapshot.fleetLoading ? "Loading Machine records…" : "No Machine records yet. Run sync to create this machine’s record.",
   }));
   for (const machine of machines) grid.append(card(machine, controller.view({
     busy: snapshot.busy, loading: snapshot.fleetLoading, machine: machine.local ? null : machine.machine,
   })));
+  if (focusKey) restoreFocus(grid, focusKey);
+}
+
+// Re-rendering replaces the rows; keep keyboard focus on the same control.
+function focusSignature(node) {
+  const row = node.closest?.(".mrow");
+  if (!row) return null;
+  const controls = [...row.querySelectorAll("button, input")];
+  return { name: row.querySelector(".fleet-name")?.textContent, index: controls.indexOf(node) };
+}
+
+function restoreFocus(grid, { name, index }) {
+  const row = [...grid.querySelectorAll(".mrow")].find((item) => item.querySelector(".fleet-name")?.textContent === name);
+  const control = row && [...row.querySelectorAll("button, input")][index];
+  if (control && !control.disabled) control.focus({ preventScroll: true });
+  else row?.querySelector(".mrow-head")?.focus({ preventScroll: true });
 }

@@ -77,45 +77,27 @@ export function toast(message, kind = "info", timeout = 4200) {
       "aria-live": isError ? "assertive" : "polite",
       "aria-atomic": "true",
     },
-    [el("div", { class: "toast-body", text: message })]
+    [el("span", { class: "toast-dot", "aria-hidden": "true" }), el("div", { class: "toast-body", text: message })]
   );
   toastHost.append(node);
   const remove = () => {
-    node.style.transition = "opacity .15s ease";
-    node.style.opacity = "0";
-    setTimeout(() => node.remove(), 160);
+    node.classList.add("out");
+    setTimeout(() => node.remove(), 200);
   };
   node.addEventListener("click", remove);
   setTimeout(remove, timeout);
   return node;
 }
 
-// Slides the pill behind the active button of every segmented control.
-// Re-rendered controls start from the last known place of the same control.
-const lastIndicator = new Map();
+// Elements with data-ago="<ISO time>" show a relative age, refreshed by a timer.
+export function ageText(iso, format) {
+  const time = Date.parse(iso);
+  if (Number.isNaN(time)) return "";
+  return format(Math.max(0, (Date.now() - time) / 1000));
+}
 
-export function placeIndicators(root = document) {
-  for (const group of root.querySelectorAll(".segmented")) {
-    const indicator = group.querySelector(".seg-ind");
-    const active = group.querySelector(".seg.active");
-    if (!indicator) continue;
-    if (!active || !active.offsetWidth) {
-      indicator.classList.remove("on");
-      continue;
-    }
-    const key = group.id || group.getAttribute("aria-label") || "";
-    const target = { x: active.offsetLeft, w: active.offsetWidth };
-    if (!indicator.classList.contains("on")) {
-      const from = lastIndicator.get(key) || target;
-      indicator.classList.add("still");
-      indicator.style.width = `${from.w}px`;
-      indicator.style.transform = `translateX(${from.x}px)`;
-      indicator.classList.add("on");
-      void indicator.offsetWidth;
-      indicator.classList.remove("still");
-    }
-    indicator.style.width = `${target.w}px`;
-    indicator.style.transform = `translateX(${target.x}px)`;
-    lastIndicator.set(key, target);
+export function refreshAges(format, root = document) {
+  for (const node of root.querySelectorAll("[data-ago]")) {
+    node.textContent = `${node.dataset.agoPrefix || ""}${ageText(node.dataset.ago, format)}`;
   }
 }

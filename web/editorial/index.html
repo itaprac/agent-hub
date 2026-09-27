@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>agent-hub</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23211f1a'/%3E%3Cg fill='%23e0b15a'%3E%3Ccircle cx='8' cy='8' r='2'/%3E%3Ccircle cx='3.2' cy='3.2' r='1.4'/%3E%3Ccircle cx='12.8' cy='3.2' r='1.4'/%3E%3Ccircle cx='3.2' cy='12.8' r='1.4'/%3E%3Ccircle cx='12.8' cy='12.8' r='1.4'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="stylesheet" href="/editorial/style.css">
+</head>
+<body>
+
+<svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-status" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+    <symbol id="i-usage" viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15l4-4 3 3 5-6"/></symbol>
+    <symbol id="i-skills" viewBox="0 0 24 24"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></symbol>
+    <symbol id="i-config" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/></symbol>
+    <symbol id="i-log" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8M21 3v5h-5"/></symbol>
+    <symbol id="i-laptop" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></symbol>
+    <symbol id="i-desktop" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="9" rx="2.5"/><path d="M8 20h8"/><circle cx="7.5" cy="12.5" r=".6"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.01"/><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+    <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></symbol>
+    <symbol id="i-adopt" viewBox="0 0 24 24"><path d="M4 12h12M12 6l6 6-6 6"/><path d="M20 4v16"/></symbol>
+  </defs>
+</svg>
+
+<div id="progress" class="progress" aria-hidden="true" hidden></div>
+<div id="app-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
+<!-- ============================================================ sidebar -->
+<aside class="side" aria-label="Primary">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"><svg class="i"><use href="#i-sync"/></svg></span>
+    <b>agent-hub</b>
+  </div>
+
+  <nav class="nav" role="tablist" aria-label="Views" aria-orientation="vertical">
+    <button class="tab" id="tab-status" role="tab" data-tab="status" aria-selected="true" aria-controls="view-status" tabindex="0" title="Status (1)" aria-keyshortcuts="1">
+      <svg class="i" aria-hidden="true"><use href="#i-status"/></svg><span class="lbl">Status</span><kbd>1</kbd>
+    </button>
+    <button class="tab" id="tab-usage" role="tab" data-tab="usage" aria-selected="false" aria-controls="view-usage" tabindex="-1" title="Usage (2)" aria-keyshortcuts="2">
+      <svg class="i" aria-hidden="true"><use href="#i-usage"/></svg><span class="lbl">Usage</span><kbd>2</kbd>
+    </button>
+    <div class="nav-label" aria-hidden="true">Repository</div>
+    <button class="tab" id="tab-skills" role="tab" data-tab="skills" aria-selected="false" aria-controls="view-skills" tabindex="-1" title="Skills (3)" aria-keyshortcuts="3">
+      <svg class="i" aria-hidden="true"><use href="#i-skills"/></svg><span class="lbl">Skills</span><span class="tab-dot" hidden title="Unsaved edits"></span><kbd>3</kbd>
+    </button>
+    <button class="tab" id="tab-instructions" role="tab" data-tab="instructions" aria-selected="false" aria-controls="view-instructions" tabindex="-1" title="Instructions (4)" aria-keyshortcuts="4">
+      <svg class="i" aria-hidden="true"><use href="#i-doc"/></svg><span class="lbl">Instructions</span><span class="tab-dot" hidden title="Unsaved edits"></span><kbd>4</kbd>
+    </button>
+    <button class="tab" id="tab-config" role="tab" data-tab="config" aria-selected="false" aria-controls="view-config" tabindex="-1" title="Config (5)" aria-keyshortcuts="5">
+      <svg class="i" aria-hidden="true"><use href="#i-config"/></svg><span class="lbl">Config</span><span class="tab-dot" hidden title="Unsaved edits"></span><kbd>5</kbd>
+    </button>
+  </nav>
+
+  <div class="side-foot">
+    <div class="tools-row">
+      <div class="theme-picker">
+        <button class="iconbtn" id="btn-theme" type="button" title="Colour scheme: dark" aria-label="Colour scheme"
+                aria-haspopup="menu" aria-expanded="false" aria-controls="theme-menu">
+          <span id="theme-icon" aria-hidden="true"></span>
+          <span id="theme-name" class="sr-only">dark</span>
+        </button>
+        <div class="theme-menu" id="theme-menu" role="menu" aria-label="Colour scheme" hidden></div>
+      </div>
+      <button class="iconbtn" id="btn-refresh" type="button" title="Refresh Store, status and Fleet (R)" aria-label="Refresh" aria-keyshortcuts="r">
+        <svg class="i" aria-hidden="true"><use href="#i-refresh"/></svg>
+      </button>
+      <button class="iconbtn" id="log-toggle" type="button" title="Log (L)" aria-label="Log" aria-expanded="false" aria-controls="logbar" aria-keyshortcuts="l">
+        <svg class="i" aria-hidden="true"><use href="#i-log"/></svg><span class="log-flag" aria-hidden="true"></span>
+      </button>
+      <button class="iconbtn" id="btn-layout" type="button" data-layout-switch aria-keyshortcuts="m">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="i" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+      </button>
+      <button class="iconbtn" id="btn-rail-settings" type="button" title="Settings" aria-label="Settings">
+        <svg class="i" aria-hidden="true"><use href="#i-gear"/></svg>
+      </button>
+    </div>
+    <div class="whoami" id="machine-chip">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="who">
+        <span class="who-name" id="machine-id">…</span>
+        <small id="machine-host">…</small>
+      </span>
+    </div>
+  </div>
+</aside>
+
+<!-- ============================================================ content -->
+<main class="main" id="main">
+  <div class="wrap">
+    <div id="banner" class="banner" role="alert" aria-atomic="true" hidden></div>
+
+    <div id="views">
+      <section class="view" id="view-status" data-view="status" role="tabpanel" aria-labelledby="tab-status" tabindex="-1">
+        <div class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow">Status</p>
+            <h1 id="status-verdict">Checking machines…</h1>
+            <p class="lede" id="status-lede"></p>
+          </div>
+          <div class="hero-act">
+            <button class="btn primary big" id="sync-all" type="button">
+              <svg class="i" aria-hidden="true"><use href="#i-sync"/></svg><span class="sync-label">Sync</span>
+            </button>
+            <small id="fleet-meta" role="status" aria-live="polite" aria-atomic="true"></small>
+          </div>
+        </div>
+
+        <section class="sec fleet-panel" id="fleet" aria-labelledby="machines-title">
+          <div class="sec-head">
+            <h2 id="machines-title">Machines</h2>
+            <span class="pill pill-idle" id="fleet-verdict" title="Recorded Store revisions"><span class="dot"></span><span id="fleet-verdict-text">Unknown</span></span>
+          </div>
+          <div class="mlist" id="fleet-grid"></div>
+        </section>
+
+        <section class="sec" aria-labelledby="checks-title">
+          <div class="sec-head">
+            <h2 id="checks-title">Local checks</h2>
+            <div class="status-toolbar" id="status-toolbar" hidden>
+              <div class="seg" id="status-filter" role="group" aria-label="Managed state filter">
+                <button type="button" data-filter="all" aria-pressed="true">All</button>
+                <button type="button" data-filter="problems" aria-pressed="false">Problems</button>
+              </div>
+            </div>
+          </div>
+          <div class="statusbar" id="summary" role="status"></div>
+          <div id="status-groups" class="checks"></div>
+        </section>
+
+        <div class="keys" aria-label="Keyboard shortcuts">
+          <span><kbd>1</kbd>–<kbd>5</kbd> switch views</span><span><kbd>R</kbd> refresh</span><span><kbd>L</kbd> log</span><span><kbd>/</kbd> filter</span><span><kbd>⌘S</kbd> save</span><span><kbd>Esc</kbd> close</span>
+        </div>
+      </section>
+
+      <section class="view" id="view-usage" data-view="usage" role="tabpanel" aria-labelledby="tab-usage" tabindex="-1" hidden>
+        <div class="usage-page" id="usage-root"></div>
+      </section>
+      <section class="view workspace" id="view-skills" data-view="skills" role="tabpanel" aria-labelledby="tab-skills" tabindex="-1" hidden></section>
+      <section class="view workspace" id="view-instructions" data-view="instructions" role="tabpanel" aria-labelledby="tab-instructions" tabindex="-1" hidden></section>
+      <section class="view workspace" id="view-config" data-view="config" role="tabpanel" aria-labelledby="tab-config" tabindex="-1" hidden></section>
+      <section class="view" id="view-settings" data-view="settings" role="tabpanel" aria-label="Settings" tabindex="-1" hidden>
+        <div class="settings-page" id="settings-root"></div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<!-- ============================================================ log popover -->
+<section class="logpop" id="logbar" aria-label="Log" hidden>
+  <header class="log-head">
+    <b class="log-title">Log</b>
+    <span class="log-exit" id="log-exit" hidden></span>
+    <span class="spacer"></span>
+    <span class="log-time" id="log-time"></span>
+    <button class="iconbtn sm" id="log-close" type="button" aria-label="Close log" title="Close (Esc)"><svg class="i" aria-hidden="true"><use href="#i-x"/></svg></button>
+  </header>
+  <p class="log-cmd" id="log-cmd">no command yet</p>
+  <pre class="log-body" id="log-body" tabindex="0" aria-label="Command output"></pre>
+</section>
+
+<div class="toasts" id="toasts"></div>
+<dialog class="modal" id="modal"></dialog>
+
+<script type="module" src="/editorial/js/app.js"></script>
+</body>
+</html>

@@ -53,6 +53,9 @@ jobs:
           node tests/web_state.mjs
           node tests/web_status.mjs
           node tests/web_theme.mjs
+          node tests/web_state_editorial.mjs
+          node tests/web_status_editorial.mjs
+          node tests/web_theme_editorial.mjs
 
       - name: Test CLI
         run: ./tests/smoke.sh
