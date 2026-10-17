@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import dataclasses
 import json
 from pathlib import Path
@@ -145,7 +146,7 @@ def _save_project(slug: str, checkout: Path | None) -> bool:
     return True
 
 
-def _exclude_file(checkout: Path) -> Path:
+def _common_dir(checkout: Path) -> Path:
     common = Path(_git(checkout, "rev-parse", "--git-common-dir"))
     if not common.is_absolute():
         common = checkout / common
@@ -153,7 +154,11 @@ def _exclude_file(checkout: Path) -> Path:
     # its reported common directory, and reject symlinks within that directory.
     if common.is_symlink():
         raise ValueError(f"{common}: Git directory must not be a symlink")
-    common = common.resolve()
+    return common.resolve()
+
+
+def _exclude_file(checkout: Path) -> Path:
+    common = _common_dir(checkout)
     path = common / "info" / "exclude"
     _safe_descendant(common, path)
     if path.is_symlink() or (path.exists() and not path.is_file()):
@@ -194,11 +199,17 @@ def _tracked(checkout: Path, target: Path) -> bool:
     return bool(_git(checkout, "ls-files", "--", target.relative_to(checkout).as_posix()))
 
 
-def _directories(projection: config.MachineProjection, checkout: Path) -> dict[Path, set[str]]:
+def _directories(projection: config.MachineProjection, checkout: Path, *, every_agent: bool = False) -> dict[Path, set[str]]:
     result: dict[Path, set[str]] = {checkout / ".agents" / "skills": set()}
-    for agent in projection.agents:
-        if not agent.universal and agent.skills_project:
-            result.setdefault(checkout / agent.skills_project, set()).add(agent.name)
+    # Unlinking also cleans directories of Agents that are no longer selected.
+    agents = (
+        [(agent.id, agent.universal, agent.skills_project) for agent in projection.settings["agents"].values()]
+        if every_agent
+        else [(agent.name, agent.universal, agent.skills_project) for agent in projection.agents]
+    )
+    for name, universal, skills_project in agents:
+        if not universal and skills_project:
+            result.setdefault(checkout / skills_project, set()).add(name)
     return result
 
 
@@ -216,7 +227,9 @@ def worktrees(checkout: Path) -> list[Path]:
         path = Path(fields[0].removeprefix("worktree "))
         if not path.is_absolute() or not path.is_dir():
             continue
-        path = path.resolve()
+        # Resolve only the parents: a symlinked worktree root stays visible so
+        # validation can reject it instead of following it elsewhere.
+        path = path.parent.resolve() / path.name
         if path not in result:
             result.append(path)
     return result
@@ -240,7 +253,7 @@ def _main_worktree(checkout: Path) -> Path:
 
 def _checkout_checks(
     projection: config.MachineProjection, project: config.ProjectProjection, checkout: Path,
-    sources: list[Path], *, apply: bool, dry_run: bool,
+    sources: Sequence[Path], *, apply: bool, dry_run: bool, every_agent: bool = False,
 ) -> list[core.StatusCheck]:
     """Link one worktree's Project skills and prune links to Skills no longer selected."""
     settings = projection.settings
@@ -248,7 +261,7 @@ def _checkout_checks(
     source_root = projection.repo / "projects" / project.name / "skills"
     checks = []
     deployed = []
-    for directory, agent_ids in _directories(projection, checkout).items():
+    for directory, agent_ids in _directories(projection, checkout, every_agent=every_agent).items():
         try:
             _safe_descendant(checkout, directory / "placeholder")
         except ValueError as exc:
@@ -322,20 +335,27 @@ def _project_checks(
             source_root = projection.repo / "projects" / project.name / "skills"
             _safe_descendant(projection.repo, source_root / "placeholder")
             # Unlinking keeps no Skill selected, so every owned link is pruned.
-            sources = [] if unlink else config.skill_directories(source_root)
+            sources: Sequence[Path] = () if unlink else config.skill_directories(source_root)
             if not sources and not apply:
                 checks.append(core.StatusCheck(
                     kind="project", level="skip",
                     text=f"project {project.name}: no Project skills in the Store; agent-hub project unlink removes the record",
                     project=project.name, target=str(checkout),
                 ))
+            common = _common_dir(checkout)
             for worktree in worktrees(checkout):
                 try:
                     # Linked worktrees share the origin and the Git exclude with
-                    # the recorded checkout, but must still be checkout roots.
-                    if worktree != checkout and project_root(worktree) != worktree:
-                        raise ValueError(f"{worktree}: Project worktree path must be a checkout root")
-                    checks.extend(_checkout_checks(projection, project, worktree, sources, apply=apply, dry_run=dry_run))
+                    # the recorded checkout, but must be real roots of that repository.
+                    if worktree != checkout and (
+                        worktree.is_symlink() or project_root(worktree) != worktree
+                        or _common_dir(worktree) != common
+                    ):
+                        raise ValueError(f"{worktree}: Project worktree must be a checkout root of {checkout}")
+                    checks.extend(_checkout_checks(
+                        projection, project, worktree, sources,
+                        apply=apply, dry_run=dry_run, every_agent=unlink,
+                    ))
                 except (ValueError, OSError, RuntimeError) as exc:
                     checks.append(core.StatusCheck(kind="project", level="DRIFT", text=core.one_line(str(exc)), project=project.name, target=str(worktree)))
         except (ValueError, OSError, RuntimeError) as exc:
@@ -385,8 +405,12 @@ def unlink_project(repo: Path, target: str) -> ProjectUnlinkReport:
         projection = config.load_machine_projection(repo)
         projection = dataclasses.replace(projection, projects=tuple(project for project in projection.projects if project.name == slug))
         checks.extend(_project_checks(projection, apply=True, unlink=True))
-        _save_project(slug, None)
-        checks.append(core.StatusCheck(kind="project", level="ok", text=f"forgot {slug}: {registry[slug]}", project=slug, target=str(registry[slug])))
+        if any(check.level in core.PROBLEM_LEVELS for check in checks):
+            # Keep the record so the links can be removed once the problem is fixed.
+            checks.append(core.StatusCheck(kind="project", level="ERROR", text=f"kept the record for {slug}; fix the problems above and run project unlink again", project=slug, target=str(registry[slug])))
+        else:
+            _save_project(slug, None)
+            checks.append(core.StatusCheck(kind="project", level="ok", text=f"forgot {slug}: {registry[slug]}", project=slug, target=str(registry[slug])))
     except (ValueError, OSError, RuntimeError) as exc:
         checks.append(core.StatusCheck(kind="project", level="ERROR", text=core.one_line(str(exc)), target=target))
     return ProjectUnlinkReport(machine_id=machine, hostname=hostname, repo=str(repo), checks=tuple(checks), exit_code=int(any(check.level in core.PROBLEM_LEVELS for check in checks)))

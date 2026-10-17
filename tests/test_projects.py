@@ -164,6 +164,49 @@ def test_unlink_by_slug_forgets_a_missing_checkout(content: Path, checkout: Path
     assert projects.load_projects() == {}
 
 
+@pytest.mark.parametrize("replacement", ["symlink", "directory"])
+def test_worktree_replaced_by_another_repository_is_not_touched(content: Path, checkout: Path, project_skill: Path, tmp_path: Path, replacement: str) -> None:
+    linked = tmp_path / "linked"
+    git(checkout, "worktree", "add", "-q", "-b", "other", str(linked))
+    shutil.rmtree(linked)
+    other = tmp_path / "other"
+    other.mkdir()
+    git(other, "init", "-q")
+    if replacement == "symlink":
+        linked.symlink_to(other, target_is_directory=True)
+    else:
+        shutil.copytree(other, linked, symlinks=True)
+    assert projects.link_project(content, checkout).exit_code == 1
+
+    for root in (other, linked):
+        assert not (root / ".agents").exists()
+        assert "/.agents/skills/private" not in (root / ".git" / "info" / "exclude").read_text()
+    assert (checkout / ".agents" / "skills" / "private").resolve() == project_skill
+
+
+def test_unlink_keeps_the_record_when_links_cannot_be_checked(content: Path, checkout: Path, project_skill: Path) -> None:
+    assert projects.link_project(content, checkout).exit_code == 0
+    slug = projects.project_slug(checkout)
+    git(checkout, "remote", "set-url", "origin", "https://github.com/other/project")
+
+    report = projects.unlink_project(content, slug)
+
+    assert report.exit_code == 1
+    assert projects.load_projects() == {slug: checkout}
+    assert (checkout / ".agents" / "skills" / "private").is_symlink()
+
+
+def test_unlink_removes_links_of_agents_that_are_no_longer_enabled(content: Path, checkout: Path, project_skill: Path) -> None:
+    assert projects.link_project(content, checkout).exit_code == 0
+    hub = content / "hub.toml"
+    hub.write_text(hub.read_text().replace('enabled = ["claude"]', "enabled = []"))
+
+    assert projects.unlink_project(content, str(checkout)).exit_code == 0
+
+    assert not (checkout / ".claude" / "skills" / "private").is_symlink()
+    assert not (checkout / ".agents" / "skills" / "private").is_symlink()
+
+
 def test_registry_rejects_relative_and_malformed_values(home: Path) -> None:
     registry = home / ".config" / "agent-hub" / "projects.json"
     for document in (["wrong shape"], {"../escape": "/tmp/root"}, {"slug": "relative"}, {"slug": 42}, {"slug": "/tmp/../outside"}):
