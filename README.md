@@ -41,7 +41,8 @@ Run `agent-hub timer on` on each Machine that should sync automatically. The opt
 | `agent-hub update [NAME ...]` | Use skills.sh to update installed Skills, then apply and commit. |
 | `agent-hub add-skill NAME` | Create a Skill in the Store. |
 | `agent-hub adopt PATH` | Move an existing Skill into the Store and leave a link. |
-| `agent-hub project link PATH` | Link private Project skills into a checkout and exclude them from Git. |
+| `agent-hub project link PATH` | Link private Project skills into a checkout and all its Git worktrees, and exclude them from Git. |
+| `agent-hub project unlink [SLUG\|PATH]` | Remove those links and forget the project record. |
 | `agent-hub add-skill NAME --project PATH` | Create a private Skill for that checkout. |
 | `agent-hub adopt PATH --project` | Adopt a Skill for its containing checkout. |
 | `agent-hub timer on\|off\|status` | Manage automatic Sync. |

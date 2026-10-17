@@ -64,6 +64,12 @@ class ContentOperations:
         with _serialized():
             return link_project(self.repo, path)
 
+    def project_unlink(self, target: str) -> core.Report:
+        from .projects import unlink_project
+
+        with _serialized():
+            return unlink_project(self.repo, target)
+
     def status(self, *, fleet: bool = False) -> core.StatusReport:
         return self._report(
             core.StatusReport, lambda projection: _status(projection, fleet)
