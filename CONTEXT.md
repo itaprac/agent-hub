@@ -31,7 +31,7 @@ The optional per-Agent instruction file `agents/<agent-id>.md`, rendered after `
 _Avoid_: agent instructions, agent file
 
 **Project skill**:
-A private Skill kept in the Store under `projects/<slug>/skills/` and linked into one project checkout without being committed there. For projects whose own repository must not carry it.
+A private Skill kept in the Store under `projects/<slug>/skills/` and linked into one project checkout and its Git worktrees without being committed there. For projects whose own repository must not carry it.
 _Avoid_: project config, local skill
 
 **Project slug**:

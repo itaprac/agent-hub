@@ -92,6 +92,78 @@ def test_linked_worktree_uses_the_common_git_exclude(content: Path, checkout: Pa
     assert "/.agents/skills/private" in (checkout / ".git" / "info" / "exclude").read_text()
 
 
+def test_link_from_a_worktree_records_the_main_checkout(content: Path, checkout: Path, project_skill: Path, tmp_path: Path) -> None:
+    linked = tmp_path / "linked"
+    git(checkout, "worktree", "add", "-q", "-b", "other", str(linked))
+    assert projects.link_project(content, linked).exit_code == 0
+    assert projects.load_projects() == {projects.project_slug(checkout): checkout}
+    for root in (checkout, linked):
+        assert (root / ".claude" / "skills" / "private").resolve() == project_skill
+
+
+def test_apply_links_worktrees_created_after_the_record(content: Path, checkout: Path, project_skill: Path, tmp_path: Path) -> None:
+    assert projects.link_project(content, checkout).exit_code == 0
+    linked = tmp_path / "worktrees" / "feature"
+    git(checkout, "worktree", "add", "-q", "-b", "feature", str(linked))
+    gone = tmp_path / "gone"
+    git(checkout, "worktree", "add", "-q", "--detach", str(gone))
+    shutil.rmtree(gone)
+
+    missing = projects.check_links(config.load_machine_projection(content))
+    assert {check.target for check in missing if check.level == "MISSING"} == {
+        str(linked / folder / "skills" / "private") for folder in (".agents", ".claude")
+    }
+    assert not any(str(gone) in check.text for check in missing)
+
+    checks = projects.apply_links(config.load_machine_projection(content))
+    assert not any(check.level in {"DRIFT", "ERROR"} for check in checks), checks
+    for folder in (".agents", ".claude"):
+        link = linked / folder / "skills" / "private"
+        assert link.is_symlink() and link.resolve() == project_skill
+        assert not os.path.isabs(os.readlink(link))
+    assert git(linked, "status", "--porcelain").stdout == ""
+    assert not gone.exists()
+
+    shutil.rmtree(project_skill)
+    projects.apply_links(config.load_machine_projection(content))
+    assert not (linked / ".agents" / "skills" / "private").is_symlink()
+
+
+def test_status_reports_a_record_without_project_skills(content: Path, checkout: Path) -> None:
+    assert projects.link_project(content, checkout).exit_code == 0
+    checks = projects.check_links(config.load_machine_projection(content))
+    assert [check.level for check in checks] == ["skip"]
+    assert "project unlink" in checks[0].text
+
+
+def test_unlink_removes_links_from_every_worktree_and_forgets_the_record(content: Path, checkout: Path, project_skill: Path, tmp_path: Path) -> None:
+    linked = tmp_path / "linked"
+    git(checkout, "worktree", "add", "-q", "-b", "other", str(linked))
+    assert projects.link_project(content, checkout).exit_code == 0
+    foreign = checkout / ".claude" / "skills" / "foreign"
+    foreign.symlink_to(tmp_path, target_is_directory=True)
+
+    report = projects.unlink_project(content, str(linked))
+
+    assert report.exit_code == 0, report.lines()
+    assert report.command == "project unlink"
+    assert projects.load_projects() == {}
+    for root in (checkout, linked):
+        for folder in (".agents", ".claude"):
+            assert not (root / folder / "skills" / "private").is_symlink()
+    assert foreign.is_symlink()
+    assert project_skill.is_dir()
+    assert projects.unlink_project(content, str(checkout)).exit_code == 1
+
+
+def test_unlink_by_slug_forgets_a_missing_checkout(content: Path, checkout: Path, tmp_path: Path) -> None:
+    assert projects.link_project(content, checkout).exit_code == 0
+    slug = projects.project_slug(checkout)
+    checkout.rename(tmp_path / "moved")
+    assert projects.unlink_project(content, slug).exit_code == 0
+    assert projects.load_projects() == {}
+
+
 def test_registry_rejects_relative_and_malformed_values(home: Path) -> None:
     registry = home / ".config" / "agent-hub" / "projects.json"
     for document in (["wrong shape"], {"../escape": "/tmp/root"}, {"slug": "relative"}, {"slug": 42}, {"slug": "/tmp/../outside"}):

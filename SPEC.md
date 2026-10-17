@@ -13,7 +13,7 @@ This spec replaces the v1 `SPEC.md`, `SPEC-PEERS.md`, and `SPEC-WEB.md`. Vocabul
 | Node | Optional. Needed only for `install` and `update`, which shell out to `npx -y skills` |
 | Store | `~/.agents`, or `--store PATH` with `~/.agents` as a symlink to it. Env `AGENT_HUB_STORE` overrides. Tests replace `HOME` |
 | Home dirs | Expand `~` and `$VAR`. Honour `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME` where the Agent table uses them |
-| Safety | Never write outside the Store, the Agent directories in the table, recorded project directories, and `~/.config/agent-hub`. Never modify text outside a Managed block |
+| Safety | Never write outside the Store, the Agent directories in the table, recorded project directories and their Git worktrees, and `~/.config/agent-hub`. Never modify text outside a Managed block |
 | macOS | No GNU coreutils assumptions. Windows: copy mode instead of symlinks |
 
 ## Store layout
@@ -118,7 +118,8 @@ Global flags: `--store PATH`, `--dry-run`, `--quiet`, `--json`. Output is one ac
 | `update [NAME...]` | `npx -y skills update -g`, then apply and commit |
 | `add-skill NAME [--project PATH]` | Create `skills/NAME/SKILL.md` from the template with `name` and `description` frontmatter |
 | `adopt PATH [--project] [--name NAME]` | Move a real skill directory into the Store and leave a link behind. `--project` files it under the project that contains PATH |
-| `project link [PATH]` | Record the project at PATH (default cwd) by its origin URL slug and link its private Skills |
+| `project link [PATH]` | Record the project at PATH, or its main checkout when PATH is a linked worktree, (default cwd) by its origin URL slug and link its private Skills |
+| `project unlink [SLUG\|PATH]` | Remove the project's Skill links from all its worktrees and forget the record; Store Skills and exclude lines stay |
 | `timer on\|off\|status` | Install or remove the user scheduler job that runs `sync --quiet` every 10 minutes |
 | `ui [--port 7337] [--host 127.0.0.1] [--service on\|off]` | Start the Console, or install it as a user service |
 | `migrate PATH` | Convert a v1 Content repo in place into the Store layout and print what needs manual action |
@@ -150,7 +151,7 @@ For every targeted Agent and every Skill that passes the `hub.toml` filters:
   ```
 
   Missing file: create it with only the block. No markers: append after a blank line. One balanced pair: replace the block. Any other marker state is `[DRIFT]` and the file is left untouched. Write only when content changes. Create missing parent directories.
-- **Project skills:** for each recorded project, link `projects/<slug>/skills/<name>` into the project's `.agents/skills/<name>` and, for non-Universal Agents, into their project skills directory. Add each link path to the project's `.git/info/exclude`. A recorded project whose path is missing is `[skip]`.
+- **Project skills:** for each recorded project, link `projects/<slug>/skills/<name>` into the project's `.agents/skills/<name>` and, for non-Universal Agents, into their project skills directory. Do the same in every other worktree that `git worktree list` reports for the checkout; bare and prunable entries are skipped. Add each link path to the shared `.git/info/exclude`. A recorded project whose path is missing is `[skip]`, and `status` reports a recorded project without Project skills as `[skip]`. Worktrees created later are linked by the next `apply`, `sync`, or Timer run.
 
 ### `sync`
 

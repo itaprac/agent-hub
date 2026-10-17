@@ -248,3 +248,12 @@ def test_project_skill_commands_reject_a_symlink_into_global_skills(content: Pat
     if operation == "adopt":
         assert source.is_dir() and not source.is_symlink()
         assert (source / "SKILL.md").read_text() == "Keep original private source\n"
+
+
+def test_project_unlink_command_forgets_the_current_checkout(content: Path, home: Path, checkout: Path) -> None:
+    succeeded(command(home, content, "add-skill", "private", "--project", str(checkout)))
+    result = command(home, content, "project", "unlink", cwd=checkout)
+    succeeded(result)
+    assert "forgot" in result.stdout
+    assert registry(home) == {}
+    assert not (checkout / ".agents" / "skills" / "private").is_symlink()

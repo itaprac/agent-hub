@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in (
         ("init", "create the Store and adopt existing Skills"),
         ("migrate", "convert a v1 repository to the Store layout"),
-        ("project", "link private Project skills"),
+        ("project", "link or unlink private Project skills"),
         ("apply", "link Skills and render instructions"),
         ("status", "report filesystem and Git drift"),
         ("sync", "commit, pull, apply, and push"),
@@ -108,6 +108,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _options(link, child=True)
     link.add_argument("path", nargs="?", default=".", type=Path)
+    unlink = project_commands.add_parser(
+        "unlink", help="remove a project's Skill links and forget its record"
+    )
+    _options(unlink, child=True)
+    unlink.add_argument("target", nargs="?", default=".", help="recorded slug or checkout path")
     return parser
 
 
@@ -174,7 +179,11 @@ def main(argv: list[str] | None = None) -> int:
                     checks=report.checks + origin_report.checks,
                     exit_code=origin_report.exit_code)
         elif args.command == "project":
-            report = store.project_link(args.path)
+            report = (
+                store.project_link(args.path)
+                if args.project_command == "link"
+                else store.project_unlink(args.target)
+            )
         elif args.command == "init":
             report = store.init(
                 from_url=args.from_url, remote=args.remote, yes=args.yes

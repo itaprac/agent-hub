@@ -20,6 +20,13 @@ class ProjectLinkReport(core.Report):
         return "project link"
 
 
+@dataclasses.dataclass(frozen=True)
+class ProjectUnlinkReport(core.Report):
+    @property
+    def command(self) -> str:
+        return "project unlink"
+
+
 def _git(checkout: Path, *args: str) -> str:
     result = gitio.run_git(checkout, *args)
     if result.returncode:
@@ -122,11 +129,15 @@ def load_projects() -> dict[str, Path]:
     return result
 
 
-def _save_project(slug: str, checkout: Path) -> bool:
+def _save_project(slug: str, checkout: Path | None) -> bool:
+    """Record or, with no checkout, forget one Project in the local registry."""
     registry = load_projects()
     if registry.get(slug) == checkout:
         return False
-    registry[slug] = checkout
+    if checkout is None:
+        del registry[slug]
+    else:
+        registry[slug] = checkout
     path = _registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     data = json.dumps({name: str(value) for name, value in sorted(registry.items())}, indent=2)
@@ -191,10 +202,113 @@ def _directories(projection: config.MachineProjection, checkout: Path) -> dict[P
     return result
 
 
-def _project_checks(projection: config.MachineProjection, *, apply: bool, dry_run: bool = False) -> list[core.StatusCheck]:
+def worktrees(checkout: Path) -> list[Path]:
+    """List the recorded checkout first, then every other worktree Git has checked out."""
+    output = _git(checkout, "worktree", "list", "--porcelain", "-z")
+    result = [checkout]
+    for record in output.split("\0\0"):
+        fields = [field for field in record.split("\0") if field]
+        if not fields or not fields[0].startswith("worktree "):
+            continue
+        # Bare entries have no files, and prunable ones lost their directory.
+        if any(field == "bare" or field.split(" ", 1)[0] == "prunable" for field in fields[1:]):
+            continue
+        path = Path(fields[0].removeprefix("worktree "))
+        if not path.is_absolute() or not path.is_dir():
+            continue
+        path = path.resolve()
+        if path not in result:
+            result.append(path)
+    return result
+
+
+def _main_worktree(checkout: Path) -> Path:
+    """Record the main checkout, which outlives the linked worktrees made from it."""
+    output = _git(checkout, "worktree", "list", "--porcelain", "-z")
+    fields = output.split("\0\0", 1)[0].split("\0")
+    if not fields[0].startswith("worktree ") or "bare" in fields[1:]:
+        return checkout
+    main = Path(fields[0].removeprefix("worktree "))
+    if not main.is_absolute() or not main.is_dir() or main.is_symlink():
+        return checkout
+    main = main.resolve()
+    try:
+        return main if project_root(main) == main and project_slug(main) == project_slug(checkout) else checkout
+    except (ValueError, gitio.GitError):
+        return checkout
+
+
+def _checkout_checks(
+    projection: config.MachineProjection, project: config.ProjectProjection, checkout: Path,
+    sources: list[Path], *, apply: bool, dry_run: bool,
+) -> list[core.StatusCheck]:
+    """Link one worktree's Project skills and prune links to Skills no longer selected."""
     settings = projection.settings
-    checks = []
     selected_agents = {agent.name for agent in projection.agents}
+    source_root = projection.repo / "projects" / project.name / "skills"
+    checks = []
+    deployed = []
+    for directory, agent_ids in _directories(projection, checkout).items():
+        try:
+            _safe_descendant(checkout, directory / "placeholder")
+        except ValueError as exc:
+            checks.append(core.StatusCheck(kind="project", level="DRIFT", text=str(exc), project=project.name, target=str(directory)))
+            continue
+        expected = set()
+        expected_sources = set()
+        for source in sources:
+            filters = settings["skills"].get(source.name, {})
+            if "machines" in filters and projection.machine_id not in filters["machines"]:
+                continue
+            allowed_agents = selected_agents if directory == checkout / ".agents" / "skills" else agent_ids
+            if "agents" in filters and not allowed_agents.intersection(filters["agents"]):
+                continue
+            expected.add(source.name)
+            expected_sources.add(source.resolve())
+            target = directory / source.name
+            if _tracked(checkout, target):
+                checks.append(core.StatusCheck(kind="skill", level="DRIFT", text=f"{target}: tracked Project path; leave it unchanged", project=project.name, target=str(target)))
+                continue
+            item = config.SkillTarget(
+                sorted(agent_ids)[0] if agent_ids else "universal", project.name,
+                source.name, source, target, "symlink",
+            )
+            check = core.apply_symlink(item, dry_run, projection.repo) if apply else core.check_skill(item)
+            checks.append(check)
+            if check.level not in core.PROBLEM_LEVELS:
+                deployed.append(target)
+        if directory.is_dir():
+            for entry in sorted(directory.iterdir()):
+                if entry.name in expected or not entry.is_symlink():
+                    continue
+                try:
+                    destination = entry.resolve(strict=False)
+                    if destination in expected_sources:
+                        continue
+                    owned = destination.is_relative_to(source_root.resolve())
+                except (OSError, RuntimeError):
+                    owned = False
+                if not owned:
+                    continue
+                if _tracked(checkout, entry):
+                    checks.append(core.StatusCheck(kind="skill", level="DRIFT", text=f"{entry}: tracked Project path; leave it unchanged", project=project.name, target=str(entry)))
+                    continue
+                if apply and not dry_run:
+                    entry.unlink()
+                checks.append(core.StatusCheck(
+                    kind="prune" if apply else "orphan", level="prune" if apply else "STALE",
+                    text=f"{'would remove' if dry_run else 'remove' if apply else 'orphaned Project skill link'} {entry}",
+                    project=project.name, target=str(entry),
+                ))
+    if apply:
+        checks.extend(exclude_paths(checkout, deployed, dry_run))
+    return checks
+
+
+def _project_checks(
+    projection: config.MachineProjection, *, apply: bool, dry_run: bool = False, unlink: bool = False,
+) -> list[core.StatusCheck]:
+    checks = []
     for project in projection.projects:
         if not project.available:
             continue
@@ -207,62 +321,23 @@ def _project_checks(projection: config.MachineProjection, *, apply: bool, dry_ru
             _exclude_file(checkout)
             source_root = projection.repo / "projects" / project.name / "skills"
             _safe_descendant(projection.repo, source_root / "placeholder")
-            sources = config.skill_directories(source_root)
-            for directory, agent_ids in _directories(projection, checkout).items():
+            # Unlinking keeps no Skill selected, so every owned link is pruned.
+            sources = [] if unlink else config.skill_directories(source_root)
+            if not sources and not apply:
+                checks.append(core.StatusCheck(
+                    kind="project", level="skip",
+                    text=f"project {project.name}: no Project skills in the Store; agent-hub project unlink removes the record",
+                    project=project.name, target=str(checkout),
+                ))
+            for worktree in worktrees(checkout):
                 try:
-                    _safe_descendant(checkout, directory / "placeholder")
-                except ValueError as exc:
-                    checks.append(core.StatusCheck(kind="project", level="DRIFT", text=str(exc), project=project.name, target=str(directory)))
-                    continue
-                expected = set()
-                expected_sources = set()
-                deployed = []
-                for source in sources:
-                    filters = settings["skills"].get(source.name, {})
-                    if "machines" in filters and projection.machine_id not in filters["machines"]:
-                        continue
-                    allowed_agents = selected_agents if directory == checkout / ".agents" / "skills" else agent_ids
-                    if "agents" in filters and not allowed_agents.intersection(filters["agents"]):
-                        continue
-                    expected.add(source.name)
-                    expected_sources.add(source.resolve())
-                    target = directory / source.name
-                    if _tracked(checkout, target):
-                        checks.append(core.StatusCheck(kind="skill", level="DRIFT", text=f"{target}: tracked Project path; leave it unchanged", project=project.name, target=str(target)))
-                        continue
-                    item = config.SkillTarget(
-                        sorted(agent_ids)[0] if agent_ids else "universal", project.name,
-                        source.name, source, target, "symlink",
-                    )
-                    check = core.apply_symlink(item, dry_run, projection.repo) if apply else core.check_skill(item)
-                    checks.append(check)
-                    if check.level not in core.PROBLEM_LEVELS:
-                        deployed.append(target)
-                if directory.is_dir():
-                    for entry in sorted(directory.iterdir()):
-                        if entry.name in expected or not entry.is_symlink():
-                            continue
-                        try:
-                            destination = entry.resolve(strict=False)
-                            if destination in expected_sources:
-                                continue
-                            owned = destination.is_relative_to(source_root.resolve())
-                        except (OSError, RuntimeError):
-                            owned = False
-                        if not owned:
-                            continue
-                        if _tracked(checkout, entry):
-                            checks.append(core.StatusCheck(kind="skill", level="DRIFT", text=f"{entry}: tracked Project path; leave it unchanged", project=project.name, target=str(entry)))
-                            continue
-                        if apply and not dry_run:
-                            entry.unlink()
-                        checks.append(core.StatusCheck(
-                            kind="prune" if apply else "orphan", level="prune" if apply else "STALE",
-                            text=f"{'would remove' if dry_run else 'remove' if apply else 'orphaned Project skill link'} {entry}",
-                            project=project.name, target=str(entry),
-                        ))
-                if apply:
-                    checks.extend(exclude_paths(checkout, deployed, dry_run))
+                    # Linked worktrees share the origin and the Git exclude with
+                    # the recorded checkout, but must still be checkout roots.
+                    if worktree != checkout and project_root(worktree) != worktree:
+                        raise ValueError(f"{worktree}: Project worktree path must be a checkout root")
+                    checks.extend(_checkout_checks(projection, project, worktree, sources, apply=apply, dry_run=dry_run))
+                except (ValueError, OSError, RuntimeError) as exc:
+                    checks.append(core.StatusCheck(kind="project", level="DRIFT", text=core.one_line(str(exc)), project=project.name, target=str(worktree)))
         except (ValueError, OSError, RuntimeError) as exc:
             checks.append(core.StatusCheck(kind="project", level="DRIFT", text=core.one_line(str(exc)), project=project.name, target=str(checkout)))
     return checks
@@ -283,6 +358,7 @@ def link_project(repo: Path, path: Path) -> ProjectLinkReport:
     try:
         checkout = project_root(path)
         slug = project_slug(checkout)
+        checkout = _main_worktree(checkout)
         changed = _save_project(slug, checkout)
         checks.append(core.StatusCheck(kind="project", level="ok", text=f"{'registered' if changed else 'registered Project unchanged:'} {slug}: {checkout}", project=slug, target=str(checkout)))
         projection = config.load_machine_projection(repo)
@@ -291,3 +367,26 @@ def link_project(repo: Path, path: Path) -> ProjectLinkReport:
     except (ValueError, OSError, RuntimeError) as exc:
         checks.append(core.StatusCheck(kind="project", level="ERROR", text=core.one_line(str(exc)), target=str(path)))
     return ProjectLinkReport(machine_id=machine, hostname=hostname, repo=str(repo), checks=tuple(checks), exit_code=int(any(check.level in core.PROBLEM_LEVELS for check in checks)))
+
+
+def unlink_project(repo: Path, target: str) -> ProjectUnlinkReport:
+    """Remove a Project's links from its worktrees and forget its local record.
+
+    TARGET is a recorded slug or a path inside the checkout. The Store's Skills
+    and the Git exclude lines stay; a later ``project link`` restores the links.
+    """
+    machine, hostname = config.resolve_machine()
+    checks = []
+    try:
+        registry = load_projects()
+        slug = target if target in registry else project_slug(Path(target))
+        if slug not in registry:
+            raise ValueError(f"project {slug} is not recorded on this Machine")
+        projection = config.load_machine_projection(repo)
+        projection = dataclasses.replace(projection, projects=tuple(project for project in projection.projects if project.name == slug))
+        checks.extend(_project_checks(projection, apply=True, unlink=True))
+        _save_project(slug, None)
+        checks.append(core.StatusCheck(kind="project", level="ok", text=f"forgot {slug}: {registry[slug]}", project=slug, target=str(registry[slug])))
+    except (ValueError, OSError, RuntimeError) as exc:
+        checks.append(core.StatusCheck(kind="project", level="ERROR", text=core.one_line(str(exc)), target=target))
+    return ProjectUnlinkReport(machine_id=machine, hostname=hostname, repo=str(repo), checks=tuple(checks), exit_code=int(any(check.level in core.PROBLEM_LEVELS for check in checks)))
