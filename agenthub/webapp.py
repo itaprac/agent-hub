@@ -20,6 +20,7 @@ from . import lifecycle
 from . import operations
 from . import remote
 from . import skills as installed_skills
+from . import plan_limits
 from . import usage
 from . import usage_fleet
 
@@ -124,6 +125,7 @@ ROUTES = {
     ("GET", "/api/fleet"): "get_fleet",
     ("GET", "/api/status"): "get_status",
     ("GET", "/api/usage"): "get_usage",
+    ("GET", "/api/usage/limits"): "get_usage_limits",
     ("GET", "/api/usage/settings"): "get_usage_settings",
     ("PUT", "/api/usage/settings"): "put_usage_settings",
     ("GET", "/api/file"): "get_file",
@@ -321,6 +323,9 @@ class Handler(BaseHTTPRequestHandler):
             days = 30
         time_zone = query["tz"][0] if query.get("tz") else None
         self.send_json(usage_fleet.read_summary(days=days, time_zone=time_zone))
+
+    def get_usage_limits(self) -> None:
+        self.send_json(plan_limits.read_limits(usage.public_settings()))
 
     def get_usage_settings(self) -> None:
         self.send_json(usage.public_settings())

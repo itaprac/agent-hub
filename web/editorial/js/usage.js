@@ -91,6 +91,22 @@ const controller = createUsageController({
   },
 });
 
+// Plan limits load beside the report: they do not depend on the period, and a
+// slow Codex answer must not hold back the chart.
+let limitsLoading = false;
+
+async function refreshLimits() {
+  if (limitsLoading) return;
+  limitsLoading = true;
+  try {
+    update({ usageLimits: await api.usageLimits(), usageLimitsError: null });
+  } catch (error) {
+    update({ usageLimitsError: error.message || "Plan limits request failed" });
+  } finally {
+    limitsLoading = false;
+  }
+}
+
 // ------------------------------------------------------------------ format
 
 function formatUsd(value) {
@@ -451,13 +467,19 @@ function windowLabel(summary) {
   return `${formatDayShort(summary.sinceDay)} – ${formatDayShort(summary.untilDay)}`;
 }
 
-function skeleton() {
-  return el("div", { class: "usage-skel", role: "status", "aria-label": "Loading usage data" }, [
-    el("div", { class: "skel skel-big" }),
-    el("div", { class: "skel skel-line" }),
-    el("div", { class: "skel skel-chart" }),
-    el("p", { class: "foot-note", text: "Reading usage from configured machines…" }),
-  ]);
+// Plan limits sit between the figure and the chart, as on the loaded page.
+function skeleton(limits) {
+  return [
+    el("div", { class: "usage-skel", role: "status", "aria-label": "Loading usage data" }, [
+      el("div", { class: "skel skel-big" }),
+      el("div", { class: "skel skel-line" }),
+    ]),
+    limits,
+    el("div", { class: "usage-skel", "aria-hidden": "true" }, [
+      el("div", { class: "skel skel-chart" }),
+      el("p", { class: "foot-note", text: "Reading usage from configured machines…" }),
+    ]),
+  ];
 }
 
 function sourcesSection(summary) {
@@ -482,6 +504,122 @@ function sourcesSection(summary) {
   ]);
 }
 
+const PLAN_LABEL = {
+  free: "Free", go: "Go", plus: "Plus", pro: "Pro", prolite: "Pro Lite",
+  team: "Team", business: "Business", enterprise: "Enterprise", edu: "Edu",
+};
+const LIMITS_SETUP = '"statusLine": {\n  "type": "command",\n  "command": "agent-hub statusline"\n}';
+
+function planLabel(plan) {
+  if (!plan) return "";
+  return PLAN_LABEL[plan] || plan.charAt(0).toUpperCase() + plan.slice(1);
+}
+
+function windowName(window) {
+  const minutes = window.windowMinutes;
+  const base = minutes === 300 ? "5-hour"
+    : minutes === 1440 ? "Daily"
+    : minutes === 10080 ? "Weekly"
+    : minutes ? (minutes % 1440 === 0 ? `${minutes / 1440}-day` : `${trim(minutes / 60)}-hour`)
+    : "Limit";
+  return window.limit ? `${window.limit} · ${base}` : base;
+}
+
+function formatSpan(ms) {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes % 60}m`;
+  return `${minutes}m`;
+}
+
+function formatMoment(ms, now) {
+  const options = ms - now < 6 * 86_400_000
+    ? { weekday: "short", hour: "numeric", minute: "2-digit" }
+    : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+  return new Intl.DateTimeFormat("en-US", options).format(new Date(ms));
+}
+
+function limitRow(window, plan, now) {
+  const elapsed = Boolean(window.resetsAt) && window.resetsAt <= now;
+  const used = elapsed ? 0 : Math.max(0, Math.min(100, num(window.usedPercent)));
+  const level = elapsed ? "" : used >= 100 || (plan.limitReached && used >= 95) ? " t-bad" : used >= 80 ? " t-warn" : "";
+  const name = windowName(window);
+  let foot;
+  if (elapsed) foot = `Reset ${formatMoment(window.resetsAt, now)} · new window not read yet`;
+  else if (window.resetsAt) foot = `Resets in ${formatSpan(window.resetsAt - now)} · ${formatMoment(window.resetsAt, now)}`;
+  else foot = "Reset time not reported";
+  return el("div", { class: `limit${level}` }, [
+    el("div", { class: "limit-head" }, [
+      el("span", { text: name }),
+      el("b", { text: elapsed ? "Reset" : `${trim(used)}% used` }),
+    ]),
+    el("div", {
+      class: "meter", role: "meter", "aria-label": `${name} limit`,
+      "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(used)),
+    }, [el("i", { style: { width: `${used}%` } })]),
+    el("div", { class: "limit-foot", text: foot }),
+  ]);
+}
+
+function planCard(plan, now) {
+  const label = PROVIDER_LABEL[plan.provider] || plan.provider;
+  const body = [];
+  if (plan.status === "ok") {
+    for (const window of plan.windows || []) body.push(limitRow(window, plan, now));
+    if (!plan.windows?.length) body.push(el("p", { class: "empty-line", text: "No limit windows reported." }));
+    const resets = (plan.resets || []).filter((item) => !item.expiresAt || item.expiresAt > now);
+    if (resets.length) {
+      const next = resets[0];
+      body.push(el("div", { class: "plan-extra" }, [
+        el("b", { text: `${resets.length} free reset${resets.length === 1 ? "" : "s"} available` }),
+        el("span", { text: `${next.expiresAt ? `Next expires ${formatMoment(next.expiresAt, now)} · ` : ""}Redeem in Codex: /usage → Redeem reset` }),
+      ]));
+    } else if (plan.provider === "codex") {
+      body.push(el("div", { class: "plan-extra" }, [el("span", { text: "No free resets available" })]));
+    }
+    if (plan.credits?.unlimited) body.push(el("div", { class: "plan-extra" }, [el("span", { text: "Unlimited credits" })]));
+    else if (plan.credits?.hasCredits) body.push(el("div", { class: "plan-extra" }, [el("span", { text: `Credits: ${plan.credits.balance}` })]));
+    if (plan.provider === "claude" && plan.capturedAt) {
+      body.push(el("p", { class: "plan-note", text: `Read from Claude Code's status line ${formatSpan(now - plan.capturedAt)} ago` }));
+    }
+  } else if (plan.status === "setup") {
+    body.push(
+      el("p", { class: "plan-note", text: "Claude Code reports plan limits only to its status line. Add this to ~/.claude/settings.json, then send one message:" }),
+      el("code", { class: "plan-code mono", text: LIMITS_SETUP }),
+    );
+  } else {
+    body.push(el("div", { class: "warnline" }, [
+      el("span", { html: '<svg class="i" aria-hidden="true"><use href="#i-alert"/></svg>' }),
+      el("span", { text: plan.message || "Could not read plan limits" }),
+    ]));
+  }
+  return el("div", { class: "plan" }, [
+    el("div", { class: "plan-head" }, [
+      el("b", {}, [swatch(plan.provider), label]),
+      plan.plan ? el("span", { class: "tag", text: planLabel(plan.plan) }) : null,
+    ]),
+    ...body,
+  ]);
+}
+
+function limitsSection(snapshot) {
+  const limits = snapshot.usageLimits;
+  let content;
+  if (snapshot.usageLimitsError) content = el("div", { class: "usage-error", role: "alert", text: snapshot.usageLimitsError });
+  else if (!limits) content = el("div", { class: "skel skel-line", role: "status", "aria-label": "Loading plan limits" });
+  else if (!limits.plans?.length) content = el("p", { class: "empty-line", text: "Turn on Claude Code or Codex in Settings to see plan limits." });
+  else {
+    const now = Date.now();
+    content = el("div", { class: "plans" }, limits.plans.map((plan) => planCard(plan, now)));
+  }
+  return el("section", { class: "sec" }, [
+    el("div", { class: "sec-head" }, [el("h2", { text: "Plan limits" }), el("p", { text: "This account, any machine" })]),
+    content,
+  ]);
+}
+
 function paint(snapshot) {
   const root = $("#usage-root");
   if (!root) return;
@@ -490,6 +628,8 @@ function paint(snapshot) {
     snapshot.tab,
     snapshot.usage,
     snapshot.usageSettings,
+    snapshot.usageLimits,
+    snapshot.usageLimitsError,
     view,
   ];
   if (painted && painted.every((item, index) => item === key[index])) return;
@@ -527,11 +667,11 @@ function paintUsagePage(root, snapshot, view) {
   ]));
 
   if (error) {
-    root.append(el("div", { class: "usage-error", role: "alert", text: error }));
+    root.append(el("div", { class: "usage-error", role: "alert", text: error }), limitsSection(snapshot));
     return;
   }
   if (loading || !summary) {
-    root.append(skeleton());
+    root.append(...skeleton(limitsSection(snapshot)));
     return;
   }
 
@@ -579,6 +719,8 @@ function paintUsagePage(root, snapshot, view) {
       `${row.machine} · ${costMetric ? `${formatTokens(row.totalTokens)} tokens` : formatUsd(row.costUsd)} · ${formatCount(row.sessions)} sessions`,
     ]))));
   }
+
+  root.append(limitsSection(snapshot));
 
   // Chart.
   const series = sourceOrder
@@ -724,7 +866,8 @@ export function renderUsage(snapshot) {
 }
 
 export async function refreshUsage() {
-  return controller.refresh();
+  const [loaded] = await Promise.all([controller.refresh(), refreshLimits()]);
+  return loaded;
 }
 
 export function isUsageLoading() {

@@ -527,6 +527,24 @@ tbody tr:hover { background: var(--hover); }
 .sharebar { width: 110px; height: 4px; background: var(--sunken); border-radius: 2px; display: inline-block; vertical-align: middle; margin-right: 10px; }
 .sharebar i { display: block; height: 100%; border-radius: 2px; background: var(--muted); }
 
+.plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.plan { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 16px; padding: 18px 20px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.plan-head { display: flex; align-items: center; gap: 10px; }
+.plan-head b { display: flex; align-items: center; gap: 8px; font-weight: 550; font-size: 15px; margin-right: auto; }
+.limit-head { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--muted); }
+.limit-head b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.meter { height: 6px; border-radius: 3px; background: var(--sunken); margin: 8px 0 6px; overflow: hidden; }
+.meter i { display: block; height: 100%; border-radius: 3px; background: var(--muted); }
+.limit.t-warn .meter i { background: var(--yellow); }
+.limit.t-warn .limit-head b { color: var(--yellow); }
+.limit.t-bad .meter i { background: var(--red); }
+.limit.t-bad .limit-head b { color: var(--red); }
+.limit-foot { font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.plan-extra { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--dim); padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.plan-extra b { color: var(--text); font-weight: 550; font-size: 14px; }
+.plan-note { margin: 0; font-size: 13px; color: var(--dim); }
+.plan-code { display: block; padding: 10px 12px; border-radius: 10px; background: var(--sunken); font-size: 12.5px; overflow-x: auto; white-space: pre; }
+
 .usage-skel { margin-top: 40px; display: flex; flex-direction: column; gap: 16px; }
 .skel { border-radius: 12px; background: var(--sunken); animation: breathe 1.4s ease-in-out infinite; }
 .skel-big { width: 320px; max-width: 80%; height: 72px; }

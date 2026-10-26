@@ -66,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("ui", "run the Console"),
         ("remote", "pair this Machine for remote Console actions"),
         ("usage", "read local transcript usage as JSON for a controller"),
+        ("statusline", "record Claude plan limits from Claude Code's status line"),
     ):
         child = subparsers.add_parser(name, help=help_text)
         _options(child, child=True)
@@ -116,9 +117,24 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _statusline() -> int:
+    """Claude Code status line: store its rate limits and print them."""
+    from . import plan_limits
+
+    try:
+        record = plan_limits.record_claude_status(json.load(sys.stdin))
+    except (OSError, ValueError):
+        # A status line must never break Claude Code's footer.
+        record = None
+    print(plan_limits.statusline_text(record))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "statusline":
+        return _statusline()
     if args.dry_run and args.command not in {"apply", "sync"}:
         parser.error("--dry-run is supported only by apply and sync")
     if args.command == "ui" and args.service is not None:
