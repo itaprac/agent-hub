@@ -1,37 +1,76 @@
-// Sidebar tree + editor shell shared by the Skills, Instructions and Config tabs.
+// Skills, Instructions and Config pages: a card grid or grouped list of items,
+// and a right-side sheet with the item's files, its actions and the editor.
 
-import { clear, el, formatBytes, toast } from "./dom.js";
+import { api } from "./api.js";
+import { $, clear, el, formatBytes, toast } from "./dom.js";
 import { createEditor } from "./editor.js";
-import { icon } from "./icons.js";
 
-export function createWorkspace(section, { title, actions = [], buildTree, buildContext, onChanged, onDirty, emptyHint = "" }) {
-  const expanded = new Set();
-  let selected = null;
+const icon = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+// Skill descriptions come from SKILL.md frontmatter; cached by path and size.
+const descriptions = new Map();
+
+export function parseDescription(content) {
+  const text = String(content || "");
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  if (front) {
+    const lines = front[1].split(/\r?\n/);
+    const index = lines.findIndex((line) => /^description\s*:/.test(line));
+    if (index >= 0) {
+      let value = lines[index].replace(/^description\s*:\s*/, "");
+      const block = /^[>|][-+]?\s*$/.test(value);
+      const parts = block ? [] : [value];
+      for (const line of lines.slice(index + 1)) {
+        if (!/^\s+\S/.test(line)) break;
+        parts.push(line.trim());
+      }
+      value = parts.join(" ").trim();
+      value = value.replace(/^(["'])([\s\S]*)\1$/, "$2");
+      if (value) return value;
+    }
+  }
+  const body = front ? text.slice(front[0].length) : text;
+  const line = body.split(/\r?\n/).map((item) => item.trim())
+    .find((item) => item && !/^(#|```|~~~|<!--|---|>|\||-\s*$)/.test(item));
+  return line ? line.replace(/[*_`]/g, "") : "";
+}
+
+export function createWorkspace(section, {
+  title, eyebrow = "Repository", lede = () => "", layout = "list", itemIcon = "doc",
+  actions = [], buildTree, buildContext, onChanged, onDirty,
+}) {
   let lastTree = [];
   let lastState = null;
+  let lastStatus = null;
   let query = "";
-  let nodeDomSequence = 0;
-
-  // Actions for the item behind the open file, such as Disable or Back up.
-  const context = buildContext ? el("div", { class: "context-bar", role: "group" }) : null;
+  let active = false;
+  let openItem = null; // { kind: "node" | "file", id }
+  let opener = null;
+  let sheetOpen = false;
+  let describing = false;
 
   const editor = createEditor({
-    onSaved: async (path) => {
-      selected = path;
+    onSaved: async () => {
       if (onChanged) await onChanged();
     },
     onDeleted: async () => {
-      selected = null;
+      // A single-file item has nothing left to show once its file is gone.
+      if (openItem?.kind === "file") closeSheet();
+      else paintSheet();
       if (onChanged) await onChanged();
     },
-    onDirty,
-    context,
+    onDirty: (dirty) => {
+      if (sheetOpen) paintFileList();
+      if (onDirty) onDirty(dirty);
+    },
     emptyTitle: "Pick a file",
-    emptyBody: emptyHint || `Select a file in the ${title.toLowerCase()} tree to edit it here.`,
+    emptyBody: "Choose one of this item’s files.",
   });
 
-  const treeId = `${section.id}-tree`;
-  const tree = el("div", { class: "tree", id: treeId, "aria-label": `${title} files` });
+  // ---------------------------------------------------------------- page
+  const ledeNode = el("p", { class: "lede" });
+  const bodyId = `${section.id}-items`;
   const search = el("input", {
     class: "search",
     type: "search",
@@ -39,259 +78,386 @@ export function createWorkspace(section, { title, actions = [], buildTree, build
     autocomplete: "off",
     spellcheck: false,
     "aria-label": `Filter ${title.toLowerCase()}`,
-    "aria-controls": treeId,
+    "aria-controls": bodyId,
+    "aria-keyshortcuts": "/",
   });
   search.addEventListener("input", () => {
     query = search.value.trim().toLowerCase();
-    paint(lastTree);
+    paint();
   });
-  const count = el("span", { class: "sidebar-count" });
-  const head = el("div", { class: "sidebar-head" }, [
-    el("h1", { class: "sidebar-title", text: title }),
-    count,
-  ]);
-  const actionBar = actions.length ? el("div", { class: "sidebar-actions" },
-    actions.map((action, index) => el("button", {
-      class: `btn btn-sm${index === 0 ? "" : " btn-ghost"}`,
+  const toolbar = el("div", { class: "toolbar" }, [
+    el("label", { class: "search-box" }, [el("span", { class: "search-ic", html: icon("search") }), search, el("kbd", { text: "/", "aria-hidden": "true" })]),
+    el("span", { class: "spacer" }),
+    ...actions.map((action) => el("button", {
       type: "button",
+      class: `btn${action.kind ? ` ${action.kind}` : ""}`,
       title: action.title,
       onClick: action.run,
-      html: `${action.icon ? icon(action.icon) : ""}<span>${action.label}</span>`,
-    }))) : null;
-  const searchWrap = el("label", { class: "search-wrap" }, [
-    el("span", { class: "search-ico", "aria-hidden": "true", html: icon("search") }),
-    search,
-    el("kbd", { class: "search-kbd", "aria-hidden": "true", text: "/" }),
+    }, [action.icon ? el("span", { class: "btn-ic", html: icon(action.icon) }) : null, action.label])),
   ]);
-  const sidebar = el("aside", { class: "sidebar", "aria-label": `${title} files` }, [head, actionBar, searchWrap, tree]);
-
+  const itemsHost = el("div", { class: `ws-items ws-${layout}`, id: bodyId });
   clear(section);
-  section.append(sidebar, editor.element);
+  section.append(
+    el("header", { class: "page-head" }, [
+      el("p", { class: "eyebrow", text: eyebrow }),
+      el("h1", { text: title }),
+      ledeNode,
+    ]),
+    toolbar,
+    itemsHost,
+  );
+
+  // ---------------------------------------------------------------- sheet
+  const sheetId = `${section.id}-sheet`;
+  const sheetTitle = el("h2", { id: `${sheetId}-title` });
+  const crumbs = el("div", { class: "crumbs" });
+  const sheetActs = el("div", { class: "sheet-acts", role: "group" });
+  const closeButton = el("button", {
+    type: "button", class: "iconbtn", "aria-label": "Close", title: "Close (Esc)", html: icon("x"),
+    onClick: () => closeSheet(),
+  });
+  const fileList = el("nav", { class: "filelist", "aria-label": "Files" });
+  const sheet = el("div", {
+    class: "sheet", id: sheetId, role: "dialog", "aria-modal": "true",
+    "aria-labelledby": sheetTitle.id, "aria-hidden": "true", inert: true,
+  }, [
+    el("div", { class: "sheet-head" }, [
+      el("div", { class: "sheet-id" }, [sheetTitle, crumbs]),
+      closeButton,
+    ]),
+    sheetActs,
+    el("div", { class: "sheet-main" }, [fileList, editor.element]),
+  ]);
+  const scrim = el("div", { class: "scrim", "aria-hidden": "true", onClick: () => closeSheet() });
+  document.body.append(scrim, sheet);
+
+  function setBackgroundInert(value) {
+    for (const node of [$(".side"), $("#main"), $("#logbar")]) {
+      if (node) node.inert = value;
+    }
+  }
+
+  function showSheet(trigger) {
+    opener = trigger || document.activeElement;
+    if (!sheetOpen) {
+      sheetOpen = true;
+      sheet.inert = false;
+      sheet.setAttribute("aria-hidden", "false");
+      sheet.classList.add("on");
+      scrim.classList.add("on");
+      setBackgroundInert(true);
+    }
+  }
+
+  function closeSheet({ restoreFocus = true } = {}) {
+    if (!sheetOpen) return false;
+    sheetOpen = false;
+    sheet.classList.remove("on");
+    scrim.classList.remove("on");
+    setBackgroundInert(false);
+    paint();
+    // Move focus out before hiding the sheet from assistive technology.
+    const target = openItem && itemsHost.querySelector(`[data-id="${CSS.escape(openItem.id)}"]`);
+    const focusable = opener && opener.isConnected && !opener.closest(".sheet") ? opener : target;
+    if (restoreFocus && focusable) focusable.focus({ preventScroll: false });
+    else if (sheet.contains(document.activeElement)) document.activeElement.blur();
+    sheet.setAttribute("aria-hidden", "true");
+    sheet.inert = true;
+    return true;
+  }
+
+  function findNode(id) {
+    for (const group of lastTree) {
+      const node = (group.nodes || []).find((item) => item.id === id);
+      if (node) return { node, group };
+    }
+    return null;
+  }
+
+  function findFile(path) {
+    for (const group of lastTree) {
+      const file = (group.files || []).find((item) => item.path === path);
+      if (file) return { file, group };
+    }
+    return null;
+  }
 
   async function select(file) {
     if (file.disabled) {
       toast(`${file.path} is not an editable text file`, "err", 3000);
-      return;
+      return false;
     }
     const opened = await editor.open(file.path, { exists: file.exists, template: file.template || "" });
-    if (opened) {
-      selected = file.path;
-      paint(lastTree);
-      paintContext();
+    paintSheet();
+    return opened;
+  }
+
+  async function openNode(node, trigger) {
+    const current = editor.path();
+    const primary = node.files.find((file) => /^SKILL\.md$/i.test(file.label) && !file.disabled)
+      || node.files.find((file) => !file.disabled);
+    const keep = current && node.files.some((file) => file.path === current);
+    if (!keep && primary && editor.isDirty() && !(await editor.confirmDiscard())) return;
+    openItem = { kind: "node", id: node.id };
+    showSheet(trigger);
+    if (!keep && primary) {
+      if (editor.isDirty()) await editor.close({ force: true });
+      await select(primary);
+    } else if (!keep) {
+      await editor.close({ force: true });
     }
+    paintSheet();
+    paint();
+    editor.focus();
+  }
+
+  async function openFile(file, trigger) {
+    if (file.disabled) {
+      toast(`${file.path} is not an editable text file`, "err", 3000);
+      return;
+    }
+    if (editor.path() !== file.path && editor.isDirty() && !(await editor.confirmDiscard())) return;
+    openItem = { kind: "file", id: file.path };
+    showSheet(trigger);
+    if (editor.path() !== file.path) {
+      if (editor.isDirty()) await editor.close({ force: true });
+      await select(file);
+    }
+    paintSheet();
+    paint();
+    editor.focus();
   }
 
   // Open a path after it moved, for example into disabled/ and back.
   async function openPath(path) {
     await editor.close({ force: true });
-    selected = null;
     if (path) {
-      const opened = await editor.open(path);
-      if (opened) selected = path;
+      await editor.open(path);
+      if (openItem?.kind === "file") openItem = { kind: "file", id: path };
+    } else {
+      closeSheet();
     }
-    paint(lastTree);
-    paintContext();
+    paintSheet();
+    paint();
   }
 
-  function paintContext() {
-    if (!context) return;
-    const path = editor.path();
-    const info = path && lastState ? buildContext(path, lastState, { editor, openPath }) : null;
-    clear(context);
-    context.hidden = !info;
-    if (!info) return;
-    context.setAttribute("aria-label", info.label);
-    const parts = [
-      el("span", { class: "context-copy" }, [
-        el("span", { class: "context-line" }, [
-          el("span", { class: "context-name", text: info.label }),
-          info.off === undefined ? null : el("span", { class: `state-pill ${info.off ? "off" : "on"}`, text: info.off ? "Disabled" : "Enabled" }),
-        ]),
-        info.note ? el("span", { class: "context-note", text: info.note }) : null,
-      ]),
-      el("span", { class: "context-actions" }, info.actions.map((action) =>
-        el("button", {
-          type: "button",
-          class: `btn btn-sm${action.kind ? ` btn-${action.kind}` : " btn-ghost"}`,
-          text: action.label,
-          title: action.title || "",
-          onClick: action.run,
-        })
-      )),
-    ];
-    // DOM append() writes null as text, so drop the missing parts.
-    context.append(...parts.filter(Boolean));
-  }
-
-  function fileItem(file) {
-    const classes = ["tree-item", "tree-file"];
-    if (!file.exists) classes.push("missing");
-    if (file.off) classes.push("is-off");
-    if (selected === file.path) classes.push("active");
-    return el(
-      "button",
-      {
-        class: classes.join(" "),
+  function paintFileList() {
+    const found = openItem?.kind === "node" ? findNode(openItem.id) : null;
+    // The Skill's SKILL.md leads, then the rest in Store order.
+    const files = [...(found?.node.files || [])].sort((a, b) => Number(/^SKILL\.md$/i.test(b.label)) - Number(/^SKILL\.md$/i.test(a.label)));
+    clear(fileList);
+    fileList.hidden = files.length < 2;
+    sheet.classList.toggle("has-files", files.length > 1);
+    if (files.length < 2) return;
+    fileList.append(el("p", { class: "filelist-head", text: plural(files.length, "file") }));
+    const current = editor.path();
+    let lastDir = "";
+    for (const file of files) {
+      const on = file.path === current;
+      const cut = file.label.lastIndexOf("/");
+      const dir = cut < 0 ? "" : file.label.slice(0, cut + 1);
+      if (dir && dir !== lastDir) fileList.append(el("p", { class: "filelist-dir mono", text: dir }));
+      lastDir = dir;
+      fileList.append(el("button", {
+        type: "button",
+        class: `file${on ? " on" : ""}${file.disabled ? " is-binary" : ""}`,
         title: file.path,
-        "aria-pressed": String(selected === file.path),
+        "aria-current": on ? "true" : null,
         "aria-disabled": file.disabled ? "true" : null,
         onClick: () => select(file),
-      },
-      [
-        el("span", { class: "fi", "aria-hidden": "true", html: icon(file.icon || "file") }),
-        el("span", { class: "name", text: file.label }),
-        el("span", { class: "meta" }, [
-          ...(file.badges || []).map(badge),
-          file.meta && !file.badges ? el("span", { class: "meta-text mono", text: file.meta }) : null,
-        ]),
-      ]
-    );
+      }, [
+        el("span", { class: "file-name", text: cut < 0 ? file.label : file.label.slice(cut + 1) }),
+        el("span", { class: "file-meta", text: on && editor.isDirty() ? "edited" : file.meta || "" }),
+      ]));
+    }
+    fileList.querySelector(".file.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
-  function badge(item) {
-    return el("span", { class: `tag${item.tone ? ` tag-${item.tone}` : ""}`, text: item.text, title: item.title || null });
-  }
+  function paintSheet() {
+    if (!openItem) return;
+    const nodeHit = openItem.kind === "node" ? findNode(openItem.id) : null;
+    const fileHit = openItem.kind === "file" ? findFile(openItem.id) : null;
+    const path = editor.path();
+    const info = path && lastState && buildContext ? buildContext(path, lastState, { editor, openPath }) : null;
+    const node = nodeHit?.node;
+    const group = nodeHit?.group || fileHit?.group;
+    sheetTitle.textContent = node?.label || info?.label || fileHit?.file.label || (path ? path.split("/").pop() : title);
 
-  function matchesQuery(text) {
-    return !query || String(text || "").toLowerCase().includes(query);
-  }
-
-  function fileVisible(file) {
-    return matchesQuery(file.label) || matchesQuery(file.path);
-  }
-
-  function nodeVisible(node) {
-    return matchesQuery(node.label) || node.files.some(fileVisible);
-  }
-
-  function groupVisible(group) {
-    if (!query) return true;
-    if (matchesQuery(group.label)) return true;
-    if (group.nodes?.some(nodeVisible)) return true;
-    if (group.files?.some(fileVisible)) return true;
-    return false;
-  }
-
-  function nodeItem(node) {
-    const filtering = Boolean(query);
-    const isOpen = filtering || expanded.has(node.id);
-    const filesId = `${section.id}-node-files-${++nodeDomSequence}`;
-    const wrapper = el("div", { class: `tree-node${isOpen ? " open" : ""}${node.off ? " is-off" : ""}` });
-    const primary = node.files.find((file) => /^SKILL\.md$/i.test(file.label)) || node.files[0];
-    const toggle = el(
-      "button",
-      {
-        class: "caret-btn",
-        title: filtering ? "Matching files are expanded while filtering" : isOpen ? "Collapse" : "Expand",
-        "aria-label": `${isOpen ? "Collapse" : "Expand"} ${node.label}`,
-        "aria-expanded": String(isOpen),
-        "aria-controls": filesId,
-        disabled: filtering,
-        onClick: (event) => {
-          event.stopPropagation();
-          if (expanded.has(node.id)) expanded.delete(node.id);
-          else expanded.add(node.id);
-          paint(lastTree);
-        },
-      },
-      [el("span", { class: "caret", "aria-hidden": "true", html: icon("chev") })]
-    );
-    const nameBtn = el(
-      "button",
-      {
-        class: "tree-item tree-node-name",
-        title: isOpen ? "Collapse" : primary ? `Open ${primary.path}` : node.title || node.label,
-        "aria-pressed": String(Boolean(primary && selected === primary.path)),
-        onClick: () => {
-          if (filtering) {
-            if (primary && !primary.disabled) select(primary);
-            return;
-          }
-          if (expanded.has(node.id)) {
-            expanded.delete(node.id);
-          } else {
-            expanded.add(node.id);
-            if (primary && !primary.disabled) select(primary);
-          }
-          paint(lastTree);
-        },
-      },
-      [
-        el("span", { class: "fi", "aria-hidden": "true", html: icon("box") }),
-        el("span", { class: "name", text: node.label }),
-        el("span", { class: "meta" }, [
-          ...(node.badges || []).map(badge),
-          node.meta ? el("span", { class: "meta-text mono", text: node.meta, title: node.metaTitle || null }) : null,
-        ]),
-      ]
-    );
-    const files = filtering ? node.files.filter((file) => matchesQuery(node.label) || fileVisible(file)) : node.files;
-    wrapper.append(
-      el("div", { class: "tree-node-row" }, [toggle, nameBtn]),
-      el("div", { class: "tree-files", id: filesId }, files.map(fileItem))
-    );
-    if (node.provenance) {
+    clear(crumbs);
+    const parts = [];
+    if (info && info.off !== undefined) {
+      parts.push(el("span", { class: `state-pill ${info.off ? "off" : "on"}`, text: info.off ? "Disabled" : "Enabled" }));
+    }
+    if (group?.label && !info?.note) parts.push(el("span", { text: group.label }));
+    if (info?.note) parts.push(el("span", { text: info.note }));
+    if (node?.provenance) {
       const source = node.provenance.url
         ? el("a", { href: node.provenance.url, target: "_blank", rel: "noopener noreferrer", text: node.provenance.source })
-        : el("span", { text: node.provenance.source });
-      wrapper.append(el("dl", { class: "skill-provenance" }, [
-        el("dt", { text: "Source" }), el("dd", {}, [source]),
-        el("dt", { text: "Updated" }), el("dd", { text: node.provenance.updated }),
-      ]));
+        : el("span", { class: "mono", text: node.provenance.source });
+      parts.push(el("span", { class: "prov" }, ["Installed from ", source]));
+      parts.push(el("span", { text: `Updated ${node.provenance.updated}` }));
     }
-    return wrapper;
+    crumbs.append(...parts);
+
+    clear(sheetActs);
+    const acts = info?.actions || [];
+    sheetActs.hidden = !acts.length;
+    sheetActs.setAttribute("aria-label", info ? `${info.label} actions` : "Actions");
+    for (const action of acts) {
+      sheetActs.append(el("button", {
+        type: "button",
+        class: `btn sm${action.kind === "danger" ? " ghost danger" : action.kind === "primary" ? " primary" : ""}`,
+        text: action.label,
+        title: action.title || "",
+        onClick: action.run,
+      }));
+    }
+    paintFileList();
   }
 
-  function paint(groups) {
-    lastTree = groups;
-    clear(tree);
-    const visible = groups.filter(groupVisible);
-    const total = groups.reduce((sum, group) => sum + (group.nodes || group.files || []).length, 0);
-    count.textContent = total ? String(total) : "";
-    if (!groups.length) {
-      tree.append(el("div", { class: "tree-empty", text: "Nothing here yet." }));
-      return;
-    }
-    if (!visible.length) {
-      tree.append(el("div", { class: "tree-empty" }, [
-        el("span", { class: "tree-empty-ico", "aria-hidden": "true", html: icon("search") }),
-        el("strong", { text: "No matches" }),
-        el("span", { text: query ? `Nothing matches “${search.value.trim()}”.` : "Nothing here yet." }),
-      ]));
-      return;
-    }
-    for (const group of visible) {
-      const items = [];
+  // ---------------------------------------------------------------- items
+  const matches = (text) => !query || String(text || "").toLowerCase().includes(query);
+  const fileVisible = (file) => matches(file.label) || matches(file.path);
+  const nodeVisible = (node) => matches(node.label) || matches(descriptions.get(node.descKey)?.text)
+    || node.files.some(fileVisible);
+
+  function badge(item) {
+    return el("span", { class: `badge${item.tone ? ` ${item.tone}` : ""}`, text: item.text, title: item.title || null });
+  }
+
+  function card(node) {
+    const desc = descriptions.get(node.descKey);
+    const on = sheetOpen && openItem?.id === node.id;
+    return el("button", {
+      type: "button",
+      class: `card${node.off ? " is-off" : ""}${on ? " sel" : ""}`,
+      dataset: { id: node.id },
+      title: node.title || node.label,
+      "aria-haspopup": "dialog",
+      onClick: (event) => openNode(node, event.currentTarget),
+    }, [
+      el("span", { class: "card-title" }, [
+        el("span", { class: "skic", html: icon(itemIcon) }),
+        el("span", { class: "card-name", text: node.label }),
+      ]),
+      el("span", { class: `card-desc${desc?.text ? "" : " is-path"}`, text: desc?.text || node.title || "" }),
+      el("span", { class: "card-foot" }, [
+        ...(node.badges || []).map(badge),
+        el("span", { class: "files", text: plural(node.files.length, "file") }),
+      ]),
+    ]);
+  }
+
+  function row(file) {
+    const [dir] = file.path.includes("/") ? [file.path.slice(0, file.path.lastIndexOf("/") + 1)] : [""];
+    const on = sheetOpen && openItem?.id === file.path;
+    return el("button", {
+      type: "button",
+      class: `item clickable${file.off ? " is-off" : ""}${file.exists === false ? " is-missing" : ""}${on ? " sel" : ""}`,
+      dataset: { id: file.path },
+      title: file.path,
+      "aria-haspopup": "dialog",
+      "aria-disabled": file.disabled ? "true" : null,
+      onClick: (event) => openFile(file, event.currentTarget),
+    }, [
+      el("span", { class: "ic neutral", html: icon(itemIcon) }),
+      el("span", { class: "item-main" }, [
+        el("span", { class: "item-name", text: file.label }),
+        dir ? el("span", { class: "path mono", text: dir }) : null,
+      ]),
+      el("span", { class: "right" }, [
+        ...(file.badges || []).map(badge),
+        file.meta ? el("span", { text: file.meta }) : null,
+        el("span", { class: "chev", html: icon("chev") }),
+      ]),
+    ]);
+  }
+
+  function paint() {
+    const groups = lastTree;
+    clear(itemsHost);
+    ledeNode.textContent = lastState ? lede(lastState, groups) : "";
+    let shown = 0;
+    for (const group of groups) {
+      const nodes = (group.nodes || []).filter(nodeVisible);
+      const files = (group.files || []).filter((file) => matches(group.label) || fileVisible(file));
+      const total = (group.nodes || group.files || []).length;
+      if (query && !nodes.length && !files.length) continue;
+      shown += nodes.length + files.length;
       if (group.nodes) {
-        const nodes = query ? group.nodes.filter(nodeVisible) : group.nodes;
-        if (!nodes.length) items.push(el("div", { class: "tree-empty", text: group.emptyText || "no entries" }));
-        else items.push(...nodes.map(nodeItem));
-      }
-      if (group.files) {
-        const files = query && !matchesQuery(group.label) ? group.files.filter(fileVisible) : group.files;
-        items.push(...files.map(fileItem));
-      }
-      tree.append(
-        el("div", { class: "tree-group" }, [
-          el("div", { class: "tree-group-head", title: group.title || "" }, [
-            el("span", { class: "tree-group-ico", "aria-hidden": "true", html: icon(group.icon || "folder") }),
-            el("span", { class: "tree-group-label", text: group.label }),
-            group.note ? el("span", { class: "note", text: group.note }) : null,
-            el("span", { class: "count", text: String(group.count ?? (group.nodes || group.files || []).length) }),
+        itemsHost.append(el("section", { class: "ws-group", "aria-label": group.label }, [
+          el("div", { class: "sec-head" }, [
+            el("h2", { class: "h-sm", title: group.title || null, text: group.label }),
+            el("p", { text: [group.note, plural(total, layout === "cards" ? "skill" : "item")].filter(Boolean).join(" · ") }),
           ]),
-          ...items,
-        ])
-      );
+          nodes.length
+            ? el("div", { class: "cards" }, nodes.map(card))
+            : el("p", { class: "empty-line", text: group.emptyText || "Nothing here yet." }),
+        ]));
+      } else {
+        itemsHost.append(el("section", { class: "ws-group", "aria-label": group.label }, [
+          el("p", { class: "grp-label", text: group.label }),
+          files.length
+            ? el("div", { class: "group" }, files.map(row))
+            : el("p", { class: "empty-line", text: group.emptyText || "Nothing here yet." }),
+        ]));
+      }
+    }
+    if (!groups.length || (query && !shown)) {
+      itemsHost.append(el("div", { class: "empty" }, [
+        el("strong", { text: query ? `No ${title.toLowerCase()} match “${search.value.trim()}”` : "Nothing here yet" }),
+        el("span", { text: query ? "Try a different name, or clear the filter." : `This Store has no ${title.toLowerCase()}.` }),
+      ]));
+    }
+    describe();
+  }
+
+  // Read SKILL.md descriptions for visible cards, one request at a time.
+  async function describe() {
+    if (!active || describing || layout !== "cards") return;
+    const pending = lastTree.flatMap((group) => group.nodes || []).filter((node) => node.descKey && !descriptions.has(node.descKey));
+    if (!pending.length) return;
+    describing = true;
+    try {
+      for (const node of pending) {
+        if (descriptions.has(node.descKey)) continue;
+        try {
+          const file = await api.readFile(node.descPath);
+          descriptions.set(node.descKey, { text: parseDescription(file.content) });
+        } catch {
+          descriptions.set(node.descKey, { text: "" });
+        }
+        const target = itemsHost.querySelector(`[data-id="${CSS.escape(node.id)}"] .card-desc`);
+        const text = descriptions.get(node.descKey).text;
+        if (target && text) {
+          target.textContent = text;
+          target.classList.remove("is-path");
+        }
+      }
+    } finally {
+      describing = false;
     }
   }
 
   return {
     editor,
-    render(state) {
+    render(state, status) {
       lastState = state;
-      paint(state ? buildTree(state) : []);
-      paintContext();
+      lastStatus = status;
+      lastTree = state ? buildTree(state, lastStatus) : [];
+      paint();
+      if (sheetOpen) paintSheet();
     },
+    activate() {
+      active = true;
+      describe();
+    },
+    deactivate() {
+      active = false;
+      closeSheet({ restoreFocus: false });
+    },
+    isSheetOpen: () => sheetOpen,
+    closeSheet,
   };
 }
 
@@ -314,77 +480,99 @@ export function skillProvenance(skill) {
   };
 }
 
-function limitBadges(filter) {
-  if (!filter) return [];
-  const badges = [];
-  if (filter.machines) badges.push({ text: `${filter.machines.join(", ")} only`, title: `Limited to Machines: ${filter.machines.join(", ")}` });
-  if (filter.agents) badges.push({ text: `${filter.agents.join(", ")} only`, title: `Limited to Agents: ${filter.agents.join(", ")}` });
-  return badges;
+const PROBLEM_LEVELS = ["DRIFT", "MISSING", "STALE", "ERROR", "CONFLICT"];
+const levelWord = (level) => level[0] + level.slice(1).toLowerCase();
+
+function limitText(state, filters) {
+  if (!filters) return "";
+  const names = [];
+  if (filters.machines) names.push(...filters.machines);
+  if (filters.agents) {
+    names.push(...filters.agents.map((id) => (state.agents || []).find((agent) => agent.name === id)?.display_name || id));
+  }
+  return names.length ? `Only ${names.join(", ")}` : "";
 }
 
-function skillNodes(skills, prefix, filters = {}) {
-  return (skills || []).map((skill) => ({
-    id: `${prefix}:${skill.name}`,
-    label: skill.name,
-    title: skill.path,
-    off: Boolean(skill.disabled),
-    provenance: skillProvenance(skill),
-    meta: String(skill.files.length),
-    metaTitle: `${skill.files.length} file${skill.files.length === 1 ? "" : "s"}`,
-    badges: [
-      skill.disabled ? { text: "Disabled", tone: "off" } : null,
-      skill.installed ? { text: "Installed", tone: "ok", title: skill.provenance?.source || "Installed skill" } : null,
-      ...limitBadges(filters[skill.name]),
-    ].filter(Boolean),
-    files: skill.files.map((file) => ({
-      label: file.name,
-      path: file.path,
-      exists: true,
-      disabled: !file.editable,
-      icon: /\.(md|txt)$/i.test(file.name) ? "fileText" : "file",
-      meta: file.editable ? formatBytes(file.size) : "binary",
-    })),
-  }));
+function skillNodes(skills, prefix, state, status) {
+  const filters = state.hub?.skills || {};
+  const checks = status?.checks || [];
+  return (skills || []).map((skill) => {
+    const primary = skill.files.find((file) => /^SKILL\.md$/i.test(file.name) && file.editable);
+    const problems = [...new Set(checks
+      .filter((check) => check.name === skill.name && PROBLEM_LEVELS.includes(check.level))
+      .map((check) => check.level))];
+    const limited = limitText(state, filters[skill.name]);
+    const provenance = skillProvenance(skill);
+    return {
+      id: `${prefix}:${skill.name}`,
+      label: skill.name,
+      title: skill.path,
+      off: Boolean(skill.disabled),
+      provenance,
+      descPath: primary?.path || null,
+      descKey: primary ? `${primary.path}:${primary.size}` : null,
+      badges: [
+        ...problems.map((level) => ({ text: levelWord(level), tone: "warn", title: `agent-hub status reports ${level}` })),
+        skill.disabled ? { text: "Disabled", tone: "off" } : null,
+        limited && !skill.disabled ? { text: limited, title: "Limited by Skill targets in hub.toml" } : null,
+        provenance ? { text: "Installed", title: `Installed from ${provenance.source}` } : null,
+      ].filter(Boolean),
+      meta: skill.disabled
+        ? "disabled"
+        : `${filters[skill.name] ? "limited · " : ""}${skill.files.length} file${skill.files.length === 1 ? "" : "s"}`,
+      files: skill.files.map((file) => ({
+        label: file.name,
+        path: file.path,
+        exists: true,
+        disabled: !file.editable,
+        meta: file.editable ? formatBytes(file.size) : "binary",
+      })),
+    };
+  });
 }
 
-export function buildSkillsTree(state) {
+export function projectLabel(name) {
+  return String(name || "").replace(/--/g, "/");
+}
+
+export function buildSkillsTree(state, status = null) {
   const groups = [
     {
       label: "Global",
-      icon: "globe",
-      nodes: skillNodes(state.skills.global, "global", state.hub?.skills),
-      emptyText: "no global skills",
+      nodes: skillNodes(state.skills.global, "global", state, status),
+      emptyText: "No global skills yet.",
     },
   ];
   for (const project of state.projects) {
     groups.push({
-      label: project.name.replace(/--/g, "/"),
-      icon: "git",
+      label: projectLabel(project.name),
       note: project.available ? "" : "off-machine",
       title: project.path || project.note,
-      nodes: skillNodes(state.skills.projects[project.name], `project:${project.name}`, state.hub?.skills),
-      emptyText: "no project skills",
+      nodes: skillNodes(state.skills.projects[project.name], `project:${project.name}`, state, status),
+      emptyText: "No project skills.",
     });
   }
   return groups;
 }
 
-function instructionFiles(entries, backups) {
+function overlayTarget(state, entry) {
+  const agent = (state?.agents || []).find((item) => `${item.name}.md` === entry.name);
+  const target = agent?.keys?.instructions_global;
+  return target ? target.split("/").pop() : "";
+}
+
+function instructionFiles(entries, backups, state) {
   return (entries || []).map((entry) => {
     const count = (backups?.[entry.source || entry.path] || []).length;
-    const state = entry.disabled ? "disabled" : entry.exists ? entry.kind : "create";
-    const words = { base: "Base", agent: "Overlay", disabled: "Disabled", create: "Create" };
+    const kind = entry.kind === "base" ? "Base" : overlayTarget(state, entry) ? `Appended to ${overlayTarget(state, entry)}` : "Overlay";
+    const words = entry.disabled ? "disabled" : entry.exists ? kind : "create";
     return {
       label: entry.name,
       path: entry.path,
       exists: entry.exists,
       off: Boolean(entry.disabled),
-      icon: "fileText",
-      meta: count ? `${state} · ${count} backup${count === 1 ? "" : "s"}` : state,
-      badges: [
-        { text: words[state] || state, tone: state === "disabled" ? "off" : state === "create" ? "accent" : "" },
-        count ? { text: `${count} backup${count === 1 ? "" : "s"}` } : null,
-      ].filter(Boolean),
+      badges: entry.disabled ? [{ text: "Disabled", tone: "off" }] : !entry.exists ? [{ text: "Not created" }] : [],
+      meta: count ? `${words} · ${count} backup${count === 1 ? "" : "s"}` : words,
     };
   });
 }
@@ -396,8 +584,8 @@ export function buildInstructionsTree(state) {
   const entries = state.instructions?.global || [];
   const backups = state.backups || {};
   return [
-    { label: "Shared instructions", icon: "fileText", files: instructionFiles(entries.filter((entry) => instructionSource(entry) === "AGENTS.md"), backups) },
-    { label: "Overlays", icon: "layers", files: instructionFiles(entries.filter((entry) => instructionSource(entry).startsWith("agents/")), backups) },
+    { label: "Shared instructions", files: instructionFiles(entries.filter((entry) => instructionSource(entry) === "AGENTS.md"), backups, state) },
+    { label: "Overlays", files: instructionFiles(entries.filter((entry) => instructionSource(entry).startsWith("agents/")), backups, state) },
   ];
 }
 
@@ -405,14 +593,11 @@ export function buildConfigTree(state) {
   return [
     {
       label: "Store",
-      icon: "gear",
       files: (state.config_files || []).filter((file) => file.path === "hub.toml").map((file) => ({
         label: file.name,
         path: file.path,
         exists: file.exists,
-        icon: "gear",
-        meta: file.exists ? "" : "create",
-        badges: file.exists ? [] : [{ text: "Create", tone: "accent" }],
+        meta: file.exists ? "Machines, Agents and Skill targets" : "create",
       })),
     },
   ];

@@ -2,7 +2,6 @@
 
 import { $, $$, clear, el, formatTime } from "./dom.js";
 import { update } from "./store.js";
-import { icon } from "./icons.js";
 
 const TONES = {
   ok: "ok",
@@ -28,18 +27,18 @@ const ACTIONS = new Set(["link", "copy", "prune", "render", "commit", "pull", "p
 export const tone = (level) => TONES[level] || "plain";
 export const isProblem = (level) => PROBLEMS.has(level);
 
+const homePath = (path) => String(path || "").replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, "~");
+
 function statusRow(check) {
   const group = check.agent || (check.project || check.kind === "project" ? "projects" : check.kind);
-  const scope = check.project ? `project ${check.project}` : check.agent ? "global" : check.kind;
-  const label = check.name ? `${scope}/${check.name}` : scope;
-  // The text repeats the identity ("codex global/x: /path"); the row already shows it.
-  const prefix = `${check.agent ? `${check.agent} ` : ""}${label}: `;
-  const text = check.text || check.target || "";
+  const project = check.project ? String(check.project).replace(/--/g, "/") : "";
+  const scope = project ? `project ${project}` : check.agent ? "global" : check.kind;
   return {
     ...check,
     group,
-    label,
-    detail: text.startsWith(prefix) && text.length > prefix.length ? text.slice(prefix.length) : text,
+    label: check.name ? `${scope}/${check.name}` : scope,
+    detail: check.text || check.target || "",
+    where: homePath(check.target),
   };
 }
 
@@ -75,7 +74,7 @@ function groupKind(name, state) {
   return agent ? agent.mode : "";
 }
 
-// One compact bar: verdict on the left, non-zero problem counters on the right.
+// One compact line: verdict, check count, and non-zero problem counters.
 // Quiet levels (ok, skip, actions) only show up in the meta text and the tooltip.
 const PROBLEM_COUNTERS = [
   ["MISSING", "missing", "warn"],
@@ -83,6 +82,12 @@ const PROBLEM_COUNTERS = [
   ["STALE", "stale", "bad"],
   ["ERROR", "error", "bad"],
 ];
+
+const ICON = (name) => `<svg class="i" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const LEVEL_WORD = {
+  ok: "OK", skip: "Skipped", MISSING: "Missing", DRIFT: "Drift", STALE: "Stale", ERROR: "Error", CONFLICT: "Conflict",
+  link: "Linked", copy: "Copied", prune: "Pruned", render: "Rendered", commit: "Committed", pull: "Pulled", push: "Pushed", warn: "Warning",
+};
 
 function summaryMeta(counts, result) {
   const parts = [];
@@ -95,14 +100,14 @@ function summaryMeta(counts, result) {
   return parts.join(" · ");
 }
 
-function renderSummary(host, result) {
+function renderSummary(host, result, state) {
   clear(host);
   if (!result) {
     host.className = "statusbar is-idle";
     host.title = "";
     host.append(
       el("span", { class: "statusbar-verdict", text: "No status yet" }),
-      el("span", { class: "statusbar-note", text: "Press Refresh (R) to run the checks." })
+      el("span", { class: "statusbar-note", text: "Press Refresh (R) to run agent-hub status." })
     );
     return;
   }
@@ -110,6 +115,7 @@ function renderSummary(host, result) {
   const { counts, checks, problems } = summarize(result);
   const clean = result.exit_code === 0 && !problems;
   const verdict = clean ? "Local files ready" : problems ? `${problems} problem${problems === 1 ? "" : "s"}` : `exit ${result.exit_code}`;
+  const healthy = checks - problems;
 
   host.className = `statusbar ${clean ? "is-ok" : "is-bad"}`;
   host.title = Object.entries(counts)
@@ -119,7 +125,10 @@ function renderSummary(host, result) {
   host.append(
     el("span", { class: "statusbar-dot", "aria-hidden": "true" }),
     el("span", { class: "statusbar-verdict", text: verdict }),
-    el("span", { class: "statusbar-note", text: `${checks} check${checks === 1 ? "" : "s"}` })
+    el("span", {
+      class: "statusbar-note",
+      text: `${healthy} of ${checks} check${checks === 1 ? "" : "s"} healthy${state?.machine_id ? ` on ${state.machine_id}` : ""}`,
+    }),
   );
 
   for (const [level, label, toneClass] of PROBLEM_COUNTERS) {
@@ -139,6 +148,21 @@ function renderSummary(host, result) {
   }
 
   host.append(el("span", { class: "statusbar-meta", text: summaryMeta(counts, result) }));
+}
+
+function checkRow(line, withGroup) {
+  const problem = isProblem(line.level);
+  const toneName = tone(line.level);
+  const glyph = problem || toneName === "warn" ? "alert" : line.level === "skip" ? "minus" : toneName === "info" ? "dot" : "check";
+  return el("div", { class: `item t-${toneName}`, role: "listitem", title: line.text }, [
+    el("span", { class: `ic t-${toneName}`, html: ICON(glyph) }),
+    el("span", { class: "item-main" }, [
+      el("span", { class: "row-label", text: line.label }),
+      withGroup ? el("span", { class: "tag", text: line.group }) : null,
+      el("span", { class: "row-detail", text: problem || !line.where ? line.detail : line.where }),
+    ]),
+    el("span", { class: `right lvl t-${toneName}`, text: LEVEL_WORD[line.level] || line.level }),
+  ]);
 }
 
 function renderGroups(host, result, state, filter) {
@@ -167,49 +191,39 @@ function renderGroups(host, result, state, filter) {
     return ga - gb || ka.localeCompare(kb);
   });
 
-  let rendered = 0;
-  for (const name of names) {
-    const lines = groups.get(name);
-    const visible = filter === "problems" ? lines.filter((line) => isProblem(line.level)) : lines;
-    if (!visible.length) continue;
-    rendered += visible.length;
-
-    const bad = lines.filter((line) => isProblem(line.level)).length;
-    const good = lines.filter((line) => line.level === "ok").length;
-    const kind = groupKind(name, state);
-
-    const head = el("div", { class: "group-head" }, [
-      el("span", { class: "group-name", text: name }),
-      el("span", { class: "group-counts" }, [
-        el("span", { text: `${lines.length} check${lines.length === 1 ? "" : "s"}` }),
-        bad ? el("span", { class: "c-bad", text: `${bad} problem${bad === 1 ? "" : "s"}` }) : null,
-        filter === "problems" ? el("span", { text: `${visible.length} of ${lines.length} shown` }) : null,
-        kind ? el("span", { class: "group-kind", text: kind }) : null,
-      ]),
-    ]);
-
-    const rows = el(
-      "div",
-      { class: "rows" },
-      visible.map((line) => {
-        const lineTone = tone(line.level);
-        const mark = lineTone === "ok" ? "check" : lineTone === "bad" ? "cross" : lineTone === "warn" ? "alert" : lineTone === "info" ? "sync" : "dash";
-        return el("div", { class: `row r-${lineTone}`, title: line.text }, [
-          el("span", { class: `st st-${lineTone}`, "aria-hidden": "true", html: icon(mark) }),
-          el("span", { class: "row-name" }, [
-            el("span", { class: "row-label", text: line.label }),
-            el("span", { class: "row-kind", text: line.kind && line.kind !== line.label ? line.kind : "" }),
-          ]),
-          el("span", { class: "row-detail", text: line.detail }),
-          el("span", { class: `badge b-${lineTone}`, text: line.level }),
-        ]);
-      })
-    );
-
-    host.append(el("section", { class: "group" }, [head, rows]));
+  // "Needs attention" first, in group order; healthy rows stay grouped by agent.
+  const attention = names.flatMap((name) => groups.get(name).filter((line) => isProblem(line.level)));
+  if (attention.length) {
+    host.append(el("section", { class: "check-sec" }, [
+      el("h3", { class: "grp-label warn", text: "Needs attention" }),
+      el("div", { class: "group", role: "list", "aria-label": "Needs attention" }, attention.map((line) => checkRow(line, true))),
+    ]));
   }
 
-  if (!rendered) {
+  if (filter !== "problems") {
+    const healthy = names
+      .map((name) => [name, groups.get(name).filter((line) => !isProblem(line.level))])
+      .filter(([, lines]) => lines.length);
+    if (healthy.length) {
+      const onlyOk = healthy.every(([, lines]) => lines.every((line) => line.level !== "skip" && tone(line.level) !== "warn"));
+      host.append(el("section", { class: "check-sec" }, [
+        el("h3", { class: "grp-label", text: onlyOk ? "Healthy" : "Other checks" }),
+        ...healthy.map(([name, lines]) => {
+          const kind = groupKind(name, state);
+          return el("div", { class: "group", role: "list", "aria-label": name }, [
+            el("div", { class: "group-head", "aria-hidden": "true" }, [
+              el("span", { class: "group-name", text: name }),
+              kind ? el("span", { class: "group-kind", text: kind }) : null,
+              el("span", { class: "group-n", text: `${lines.length}` }),
+            ]),
+            ...lines.map((line) => checkRow(line, false)),
+          ]);
+        }),
+      ]));
+    }
+  }
+
+  if (!host.firstChild) {
     host.append(
       el("div", { class: "empty" }, [
         el("strong", { text: filter === "problems" ? "No problems" : "No output" }),
@@ -220,17 +234,14 @@ function renderGroups(host, result, state, filter) {
 }
 
 export function renderStatusView(store) {
-  renderSummary($("#summary"), store.status);
+  renderSummary($("#summary"), store.status, store.state);
   renderGroups($("#status-groups"), store.status, store.state, store.filter);
 
   // The All/Problems filter is only useful when there is something to filter to.
   const problems = store.status ? summarize(store.status).problems : 0;
   $("#status-toolbar").hidden = !problems;
-  const issueCount = $("#status-issue-count");
-  if (issueCount) issueCount.textContent = problems ? String(problems) : "";
-  for (const button of $$("#status-filter .seg")) {
+  for (const button of $$("#status-filter button")) {
     const active = button.dataset.filter === store.filter;
-    button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   }
 }
@@ -243,8 +254,6 @@ export function renderLog(result) {
 
   if (!result) {
     cmd.textContent = "no command yet";
-    const drawerCmd = $("#log-drawer-cmd");
-    if (drawerCmd) drawerCmd.textContent = "";
     exit.hidden = true;
     time.textContent = "";
     clear(body);
@@ -253,8 +262,6 @@ export function renderLog(result) {
   }
 
   cmd.textContent = `agent-hub ${result.display_command || result.command}`;
-  const drawerCmd = $("#log-drawer-cmd");
-  if (drawerCmd) drawerCmd.textContent = cmd.textContent;
   exit.hidden = false;
   exit.textContent = `exit ${result.exit_code}`;
   exit.className = `log-exit ${result.exit_code === 0 ? "zero" : "nonzero"}`;

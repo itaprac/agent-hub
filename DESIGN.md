@@ -1,173 +1,123 @@
 ---
 name: agent-hub
-description: A precise operator console for shared agent state across trusted machines.
+description: A calm, editorial console for shared agent state across trusted machines.
 colors:
   dark-canvas: "#17150f"
-  dark-rail: "#12100b"
-  dark-surface: "#1d1c17"
-  dark-sunken: "#100e09"
+  dark-panel: "#1e1c17"
+  dark-sunken: "#110f0b"
   dark-text: "#eae8e1"
-  dark-muted: "#adaba1"
-  dark-faint: "#a4a299"
-  dark-dim: "#9a9891"
+  dark-muted: "#b7b4aa"
+  dark-dim: "#9d9b95"
   dark-copper: "#e4ac59"
   dark-copper-ink: "#23190a"
   black-canvas: "#000000"
-  black-rail: "#000000"
-  black-surface: "#12100d"
-  black-sunken: "#060503"
-  light-canvas: "#f4f2ea"
-  light-rail: "#edebe2"
-  light-surface: "#fdfcf7"
-  light-sunken: "#efede5"
+  black-panel: "#100f0c"
+  black-sunken: "#070604"
+  light-canvas: "#f5f3ed"
+  light-panel: "#fdfcf8"
+  light-sunken: "#edebe4"
   light-text: "#1d1b10"
   light-muted: "#4b483c"
-  light-faint: "#555349"
-  light-dim: "#5d5b53"
+  light-dim: "#636057"
   light-copper: "#a75c00"
   light-copper-ink: "#faf8f1"
   success-dark: "#6fd087"
   warning-dark: "#e8be62"
-  danger-dark: "#ed756e"
+  danger-dark: "#f47b74"
   success-light: "#197037"
   warning-light: "#865900"
   danger-light: "#ac3031"
 typography:
-  headline:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
-    fontSize: "28px"
-    fontWeight: 600
+  display:
+    fontFamily: "-apple-system, BlinkMacSystemFont, SF Pro Text, Segoe UI, system-ui, sans-serif"
+    fontSize: "40px"
+    fontWeight: 650
     lineHeight: 1.08
-    letterSpacing: "-0.028em"
-  title:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
-    fontSize: "18px"
-    fontWeight: 600
-    lineHeight: 1.2
+    letterSpacing: "-0.035em"
+  section:
+    fontFamily: "-apple-system, BlinkMacSystemFont, SF Pro Text, Segoe UI, system-ui, sans-serif"
+    fontSize: "20px"
+    fontWeight: 620
+    lineHeight: 1.25
     letterSpacing: "-0.02em"
   body:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
-    fontSize: "14px"
+    fontFamily: "-apple-system, BlinkMacSystemFont, SF Pro Text, Segoe UI, system-ui, sans-serif"
+    fontSize: "15px"
     fontWeight: 400
-    lineHeight: 1.45
+    lineHeight: 1.5
     letterSpacing: "normal"
   code:
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
+    fontFamily: "ui-monospace, SF Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
     fontSize: "13px"
     fontWeight: 400
-    lineHeight: 1.65
-    letterSpacing: "normal"
-  label:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
-    fontSize: "12px"
-    fontWeight: 500
-    lineHeight: 1.4
+    lineHeight: "22px"
     letterSpacing: "normal"
 rounded:
-  xs: "8px"
-  sm: "10px"
-  md: "12px"
-  card: "14px"
-  canvas: "16px"
-  pill: "999px"
+  control: "999px"
+  row: "14px"
+  card: "16px"
+  sheet: "20px"
 spacing:
   xs: "4px"
   sm: "8px"
-  md: "12px"
-  lg: "16px"
-  xl: "28px"
-components:
-  button-primary-dark:
-    backgroundColor: "{colors.dark-copper}"
-    textColor: "{colors.dark-copper-ink}"
-    typography: "{typography.body}"
-    rounded: "{rounded.sm}"
-    padding: "0 12px"
-    height: "32px"
-  button-primary-light:
-    backgroundColor: "{colors.light-copper}"
-    textColor: "{colors.light-copper-ink}"
-    typography: "{typography.body}"
-    rounded: "{rounded.sm}"
-    padding: "0 12px"
-    height: "32px"
-  field-dark:
-    backgroundColor: "{colors.dark-sunken}"
-    textColor: "{colors.dark-text}"
-    typography: "{typography.code}"
-    rounded: "{rounded.sm}"
-    padding: "0 11px"
-    height: "36px"
-  field-light:
-    backgroundColor: "{colors.light-sunken}"
-    textColor: "{colors.light-text}"
-    typography: "{typography.code}"
-    rounded: "{rounded.sm}"
-    padding: "0 11px"
-    height: "36px"
-  machine-surface-dark:
-    backgroundColor: "{colors.dark-surface}"
-    textColor: "{colors.dark-text}"
-    rounded: "{rounded.card}"
-    padding: "20px 22px 18px"
-  machine-surface-light:
-    backgroundColor: "{colors.light-surface}"
-    textColor: "{colors.light-text}"
-    rounded: "{rounded.card}"
-    padding: "20px 22px 18px"
+  md: "16px"
+  lg: "28px"
+  section: "64px"
 ---
 
 # Design System: agent-hub
 
 ## Overview
 
-**Creative North Star: "The Soft Workbench"**
+**Creative North Star: "Calm Editorial"**
 
-agent-hub is a calm work surface for repository maintenance. The navigation sits directly on the rail colour; all content lives in one inset, rounded canvas panel with a slim header (breadcrumb, Store path pill, Refresh with its `R` hint, colour-scheme menu). Warm olive neutrals reduce glare, copper marks the primary action, focus, and selection, and semantic colours report real state only. The approved reference is `prototypes/a-soft-workbench.html` in the main checkout.
+The Console reads like a well-set page. A light, borderless sidebar sits on the canvas; content is one centred column (max 960px) under a 40px sentence-case title. Every page opens with a plain statement of real state (for example "Everything is in sync." or "1 machine needs attention.") and a quiet sub-line of evidence. Light is the showcase; Dark, Black and System are equal. System keeps the stored default (Dark) and maps OS dark to Dark, never Black.
 
-Dark, Light, Black, and System are equal operating environments.
+Canonical colour values are OKLCH in `web/style.css`; the frontmatter holds sRGB exports.
 
-**Key characteristics:**
+## Colour
 
-- Sans-serif, sentence-case interface. Mono only for paths, hashes, numbers in tables, commands, and code. No uppercase letter-spaced labels.
-- Cards: 14px radius, a one-pixel ring, and a very soft drop. Floating layers (menus, tooltips, log drawer, dialogs) use the pop shadow.
-- Segmented controls are pills with a sliding indicator (`dom.js placeIndicators`).
-- Structural responsive changes at 1180px, 1000px (68px icon rail, stacked workspace), 860px, and 600px (top navigation, stacked editor actions).
-- Visible copper focus rings, reduced-motion support, 44px targets at ≤1000px or with a coarse pointer.
-
-## Colors
-
-Canonical values are OKLCH in `web/style.css`; the frontmatter holds sRGB exports.
-
-- **Layers:** `--rail` (sidebar and page) → `--canvas` (inset panel) → `--card` / `--card-2` (cards, raised controls) → `--sunken` (inputs, log, gutters). Black keeps rail and canvas at pure black and lifts cards slightly (ADR 0001).
-- **Text:** `--text`, `--muted`, `--faint`, `--dim`. The weakest level keeps 4.5:1 on its hardest surface.
-- **Copper** (`--accent`): primary button, focus ring, selected tree item, active nav icon, loading bar. Below 10% of a screen.
-- **State:** `--green` synced/ok, `--yellow` drift/waiting/unsaved, `--red` errors and destructive actions. Each has a `-soft` fill for badges and row tints.
-- **Brands in charts:** `--usage-claude` (orange), `--usage-codex` (neutral ink), `--usage-grok`, `--usage-cursor`.
-- **Syntax:** `--syn-key`, `--syn-str`, `--syn-num`, `--syn-link`, `--syn-head`, `--syn-pre`. Warm, low chroma, never state colours.
-
-**The Evidence Color Rule.** Green, yellow, and red encode state only. **The Copper Restraint Rule.** Copper is for action, focus, and selection only. **The Black Canvas Rule.** Pure black only on Black's rail and canvas; System never resolves to Black.
+- **Canvas / panel / sunken**: warm olive paper (Light) or ink (Dark). Panels are one step lighter than the canvas; sunken fills sit behind icons, chips, segmented controls and the editor.
+- **Copper** (`--accent`): primary actions (Sync, New skill, Save), focus rings, current selection (selected card, switch on, dirty dot). Keep it under 10% of a screen.
+- **Green / yellow / red**: real state only (machine state, check results, problems, errors, the failed-command dot on the Log button). Never decoration.
+- **Series colours** (`--usage-codex`, `--usage-claude`, `--usage-grok`, `--usage-cursor`): charts, tool shares and swatches only. Cursor is violet, not green, so it cannot read as "healthy".
+- **Syntax colours** (`--syn-*`): editor only. Headings coral, keys blue, strings teal, numbers magenta, inline code rose, links blue. They avoid the state hues and meet AA on the editor surface.
+- **Black**: pure black only on page and sidebar canvas (`docs/adr/0001-black-canvas-pure-black.md`). Panels keep the olive tint.
 
 ## Typography
 
-- **Headline** 28px/600, −0.028em: page verdicts and page titles (24px below 860px).
-- **Title** 15–20px/600: section and workspace titles, machine names, modal titles.
-- **Body** 13–14px sans: controls and explanations. Small labels are 12px sans, weight 500, sentence case.
-- **Code** 13px/1.7 mono: editor, log, paths, commit hashes, file sizes.
+- System sans for everything a person reads: titles, labels, buttons, sentences. Sentence case; no uppercase letter-spaced labels.
+- Mono only for paths, hashes, commands, model ids and editor text.
+- Scale: 40px page titles (32px below 720px), 76px usage figure (52px mobile), 20px section titles, 15px body, 13–13.5px supporting text.
+- Tabular figures for money, token counts and times.
+
+## Layout
+
+- **Sidebar**: 232px, no border, labelled tabs with shortcut hints on hover. Footer holds colour scheme, Refresh, Log and Settings icon buttons and the machine identity.
+- **Below 1100px**: 76px icon rail; labels move to tooltips and accessible names.
+- **Below 720px**: bottom tab bar with all five destinations (icon + short label), and a top bar with the brand and the four tool buttons. Nothing is hidden: Refresh, theme, Log, Settings, Sync, Apply, filters and editor actions stay reachable at 320px.
+- Sections are separated by 64px of space, not rules. Tables and wide lists scroll inside their section.
 
 ## Components
 
-- **Buttons:** 32px (28px `btn-sm`, 38px `btn-lg`), 10px radius. Primary is copper with ink text. Ghost buttons are transparent until hover. Danger uses red text and a soft red hover.
-- **Tags / badges:** 20px pills; neutral ring by default, soft fills for ok, warn, accent, and an outline for off.
-- **Status:** verdict header with a state badge, meta line (Store rev, machine count, automatic sync), and Sync. Machine cards show state, confirmation age, a facts strip (commit, last sync, recorded, app), agent chips, dry-run switch, and per-machine Sync / Apply. Local checks are one card, grouped by Agent, with an All / Issues filter that appears only when there are issues.
-- **Usage:** hero cost with by-machine bars, per-tool rows with share bars and source warnings, five KPI tiles, smooth area chart (monotone curves, peak label, hover and keyboard crosshair with tooltip), and a breakdown table by model or by period.
-- **Workspaces:** 320px tree pane (title with count, actions, filter with `/` hint, grouped tree with icons, badges, provenance) beside the editor card. The context bar above the editor carries item actions (Targets, Disable, Back up…).
-- **Editor:** the `<textarea>` stays the real input with transparent text over a highlighted `<pre>` that wraps identically; both grow inside one scroll container, so no scroll syncing is needed. Line numbers are CSS counters in the gutter; the caret line is tinted. Markdown, TOML, JSON, YAML, shell, and Python are highlighted line by line with memoised state; only changed lines are re-rendered, and files above 400 kB show plain text.
-- **Log:** a pill at the bottom right (command, exit code, `L`) that expands into a drawer; `L` or Escape closes it.
-- **Dialogs, menus, tooltips, toasts:** `--panel` surface with the pop shadow; toasts are inverted pills at the bottom centre.
+- **Buttons**: pill shaped, 34px (48px for the hero Sync); ghost for secondary, copper for primary, red text for destructive. 44px on narrow or coarse-pointer screens.
+- **Segmented control**: sunken pill with a raised panel for the pressed option (`aria-pressed`).
+- **Machine rows**: 52px device tile, name + host, state word with dot, "Confirmed Xm ago", chevron. Rows expand in place (grid-rows transition) to facts, command buttons and the dry-run switch.
+- **Grouped lists** (iOS-Settings style): rounded panel, 50px rows, inset separators, tinted 24px status icon. Status uses "Needs attention" then "Healthy" groups.
+- **Cards**: skill grid, 16px radius, hover lifts 2px with a stronger border; badges for problems, Disabled, target limits and Installed.
+- **Sheet**: right-side drawer (full screen below 720px) with the item's title, state, actions, file list and editor. It makes the page inert while open and returns focus to its card on close (Esc).
+- **Editor**: transparent-text `<textarea>` over a highlighted `<pre>` in one grid cell with identical font, padding and wrapping, so the textarea stays the real input (undo, selection, IME, screen readers). Line numbers and the current-line tint live in the overlay; only changed lines are re-highlighted.
+- **Log**: popover from the sidebar (L), not a permanent bar.
+- **Toasts**: bottom-centre pills; errors use the red fill.
 
-## Do's and Don'ts
+## Elevation and motion
 
-**Do** show state with text, counts, and exact paths; keep all five destinations, Refresh, theme, filtering, editor actions, Apply, and Sync reachable at 320px; keep AA contrast on every small text role; respect reduced motion.
+Flat by default. One soft shadow (`--shadow`) is reserved for floating layers: sheet, popovers (log, theme menu), chart tooltip, dialogs and toasts. Motion is short and eased (rise-in views, expanding rows, sliding sheet); `prefers-reduced-motion` removes it.
 
-**Don't** use uppercase letter-spaced labels, mono for prose, glassmorphism, neon, gradient text, pure white, colored side stripes wider than one pixel, custom scrollbars, or pure black outside the Black scheme.
+## Accessibility
+
+WCAG 2.2 AA contrast for text roles in all four schemes, visible 2px copper focus rings, keyboard access to every control (tabs with arrow keys, 1–5, R, L, /, ⌘S, Esc, chart arrow keys), 44px targets on touch, and the live `role="status"` regions of the previous design.
+
+## Don'ts
+
+No generic SaaS dashboards, terminal cosplay, neon, glassmorphism, gradient text, pure white, or coloured side stripes. No shadows on resting cards. Don't use state colours for decoration.

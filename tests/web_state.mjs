@@ -281,6 +281,8 @@ globalThis.document = {
   createTextNode: (text) => Object.assign(new FleetNode("text"), { textContent: text }),
 };
 const descendants = (node) => [node, ...node.children.flatMap(descendants)];
+// The row header button only expands the machine details; commands are the other controls.
+const commandControls = (node) => descendants(node).filter((child) => ["button", "input"].includes(child.tag) && child.className !== "mrow-head");
 const renderedText = (node) => descendants(node).map((child) => child.textContent).join(" ");
 const emptyFleet = { busy: 0, fleetLoading: false, fleet: { machine_id: "mini", machines: [] } };
 try {
@@ -290,7 +292,7 @@ try {
   let cards = panelNodes.get("#fleet-grid").children.filter((node) => node.tag === "article");
   assert.equal(cards.length, 1);
   assert.match(cards[0].className, /is-local/);
-  assert.deepEqual(descendants(cards[0]).filter((node) => node.tag === "button")
+  assert.deepEqual(commandControls(cards[0]).filter((node) => node.tag === "button")
     .map((node) => [renderedText(node).trim(), node.disabled]), [["Sync", false], ["Apply", false]]);
   assert.equal(descendants(cards[0]).filter((node) => node.type === "checkbox").length, 1);
 
@@ -303,11 +305,11 @@ try {
   assert.equal(cards.length, 2);
   const remoteCard = cards.find((node) => !node.className.includes("is-local"));
   assert.match(renderedText(remoteCard), /laptop/);
-  assert.equal(descendants(remoteCard).filter((node) => ["button", "input"].includes(node.tag)).length, 0);
+  assert.equal(commandControls(remoteCard).length, 0);
   assert.match(renderedText(remoteCard), /Remote control is not configured/);
   renderFleet({ ...emptyFleet, fleet: { machine_id: "mini", machines: [{ ...remote, remote_control: true }] } });
   const configuredCard = panelNodes.get("#fleet-grid").children.find((node) => node.tag === "article" && !node.className.includes("is-local"));
-  const remoteButtons = descendants(configuredCard).filter((node) => node.tag === "button");
+  const remoteButtons = commandControls(configuredCard).filter((node) => node.tag === "button");
   assert.deepEqual(remoteButtons.map((node) => [node.title, node.disabled]), [["Publish this Store, sync on laptop, then refresh its record", false], ["Apply on laptop", false]]);
   assert.equal(descendants(configuredCard).filter((node) => node.type === "checkbox").length, 1);
   assert.doesNotMatch(renderedText(configuredCard), /Remote control is not configured|offline|online/);

@@ -62,3 +62,9 @@ def test_broken_pipe_does_not_attempt_an_error_response(monkeypatch: pytest.Monk
     monkeypatch.setattr(handler, "send_error_json", unexpected_error_response)
     with pytest.raises(BrokenPipeError, match="client disconnected"):
         handler.dispatch("GET")
+
+
+def test_old_editorial_url_redirects_to_the_console(server: str) -> None:
+    with urllib.request.urlopen(f"{server}/editorial/", timeout=5) as response:
+        assert response.url == f"{server}/"
+        assert b'src="/js/app.js"' in response.read()

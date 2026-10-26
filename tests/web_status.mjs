@@ -30,8 +30,9 @@ globalThis.document = {
 };
 const descendants = (node) => [node, ...node.children.flatMap(descendants)];
 const byClass = (node, name) => descendants(node).filter((child) => child.className === name);
-const labels = () => nodes.get("#status-groups").children.map((group) => [
-  byClass(group, "group-name")[0]?.textContent,
+// Each list card: "Needs attention" first, then one card per healthy group.
+const labels = () => byClass(nodes.get("#status-groups"), "group").map((group) => [
+  group["aria-label"],
   byClass(group, "row-label").map((node) => node.textContent),
 ]);
 const checks = [
@@ -54,9 +55,9 @@ try {
   });
   renderStatusView(view);
   const expectedLabels = [
-    ["codex", ["project demo/review", "global"]],
-    ["orphan", ["orphan"]],
-    ["projects", ["project absent", "project demo/shared"]],
+    ["Needs attention", ["project demo/review", "orphan", "project demo/shared"]],
+    ["codex", ["global"]],
+    ["projects", ["project absent"]],
     ["git", ["git"]],
   ];
   assert.deepEqual(labels(), expectedLabels);
@@ -67,7 +68,7 @@ try {
   assert.deepEqual(labels(), expectedLabels);
   renderStatusView({ ...view, filter: "problems" });
   assert.deepEqual(labels(), [
-    ["codex", ["project demo/review"]], ["orphan", ["orphan"]], ["projects", ["project demo/shared"]],
+    ["Needs attention", ["project demo/review", "orphan", "project demo/shared"]],
   ]);
   renderLog(result);
   const logText = descendants(nodes.get("#log-body")).map((node) => node.textContent).filter(Boolean);

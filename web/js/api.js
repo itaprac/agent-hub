@@ -46,6 +46,7 @@ export const api = {
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Warsaw";
     return request("GET", `/api/usage?days=${encodeURIComponent(days)}&tz=${encodeURIComponent(zone)}`);
   },
+  usageLimits: () => request("GET", "/api/usage/limits"),
   usageSettings: () => request("GET", "/api/usage/settings"),
   saveUsageSettings: (payload) => request("PUT", "/api/usage/settings", payload),
   run: (command, dryRun, machine) => request("POST", "/api/run", { command, dry_run: Boolean(dryRun), ...(machine ? { machine } : {}) }),

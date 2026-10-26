@@ -56,8 +56,8 @@ const controller = createSettingsController({
 });
 
 function sourceRow(name, checked, title, detail, extra) {
-  return el("div", { class: "settings-source" }, [
-    el("span", { class: `usage-mark usage-mark-${name}`, html: MARK[name] }),
+  return el("div", { class: "item settings-source" }, [
+    el("span", { class: `ic mark-ic usage-mark-${name}`, html: MARK[name] }),
     el("div", { class: "settings-source-copy" }, [
       el("div", { class: "settings-source-name", text: title }),
       el("p", { class: "settings-source-detail", text: detail }),
@@ -68,6 +68,13 @@ function sourceRow(name, checked, title, detail, extra) {
       el("span", { class: "sw" }),
       el("span", { class: "sr-only", text: `Track ${title}` }),
     ]),
+  ]);
+}
+
+function infoRow(label, value, mono = false) {
+  return el("div", { class: "item" }, [
+    el("span", { class: "item-main" }, [el("span", { class: "item-name", text: label })]),
+    el("span", { class: `right${mono ? " mono" : ""}`, text: value || "—", title: value || "" }),
   ]);
 }
 
@@ -83,9 +90,9 @@ function tokenForm(settings, tokenDraft) {
       placeholder: settings.cursorTokenSet ? "Token saved on this machine" : "WorkosCursorSessionToken",
       value: tokenDraft,
     }),
-    el("button", { class: "btn btn-sm btn-primary", type: "submit", text: "Save" }),
+    el("button", { class: "btn sm primary", type: "submit", text: "Save" }),
     settings.cursorTokenSet
-      ? el("button", { class: "btn btn-sm", type: "button", text: "Clear", dataset: { usageClearToken: "1" } })
+      ? el("button", { class: "btn sm ghost", type: "button", text: "Clear", dataset: { usageClearToken: "1" } })
       : null,
   ]);
 }
@@ -95,7 +102,7 @@ function paint(snapshot) {
   if (!root) return;
   const view = controller.view();
   const settings = snapshot.usageSettings || snapshot.usage?.settings || null;
-  const key = [snapshot.tab, settings, view];
+  const key = [snapshot.tab, settings, view, snapshot.state];
   if (painted && painted.every((item, index) => item === key[index])) return;
   if (snapshot.tab !== "settings") {
     painted = key;
@@ -103,23 +110,34 @@ function paint(snapshot) {
   }
 
   clear(root);
+  root.append(el("header", { class: "page-head" }, [
+    el("p", { class: "eyebrow", text: "Settings" }),
+    el("h1", { text: "Settings" }),
+    el("p", { class: "lede", text: "Machine-local options. They are not stored in Git." }),
+  ]));
+  const state = snapshot.state;
+  if (state) {
+    root.append(el("section", { class: "sec" }, [
+      el("div", { class: "sec-head" }, [el("h2", { text: "This machine" })]),
+      el("div", { class: "group" }, [
+        infoRow("Machine", state.machine_id),
+        infoRow("Host", state.hostname),
+        infoRow("Store", state.repo, true),
+      ]),
+    ]));
+  }
   if (!settings) {
     root.append(el("p", { class: "settings-note", text: "Loading usage settings…" }));
     painted = key;
     return;
   }
   root.append(
-    el("div", { class: "settings-head" }, [
-      el("h1", { class: "title", text: "Settings" }),
-      el("p", { class: "settings-lead", text: "Machine-local options. They are not stored in Git." }),
-    ]),
     el("section", { class: "sec" }, [
-      el("div", { class: "sec-head" }, [el("h2", { class: "sec-title", text: "Usage sources" })]),
-      el("p", {
-        class: "settings-note",
-        text: "Choose which local transcripts and APIs this machine includes in Usage.",
-      }),
-      el("div", { class: "settings-sources" }, [
+      el("div", { class: "sec-head" }, [
+        el("h2", { text: "Usage sources" }),
+        el("p", { text: "Transcripts and APIs this machine includes in Usage." }),
+      ]),
+      el("div", { class: "group settings-sources" }, [
         sourceRow(
           "claude",
           settings.claude,
