@@ -63,6 +63,7 @@ export const api = {
   deleteBackup: (path, id) => request("POST", "/api/backup", { action: "delete", path, id }),
   skillTargets: (name, machines, agents) => request("POST", "/api/config", { action: "skill-targets", name, machines, agents }),
   agentSettings: (enabled, mode) => request("POST", "/api/config", { action: "agents", enabled, mode }),
+  claudeStatusline: (enabled) => request("POST", "/api/config", { action: "claude-statusline", enabled }),
   readFile: (path) => request("GET", `/api/file?path=${encodeURIComponent(path)}`),
   writeFile: (path, content, revision) => request("PUT", "/api/file", { path, content, revision }),
   deleteFile: (path, revision) => request("DELETE", "/api/file", { path, revision }),

@@ -166,6 +166,10 @@ def main(argv: list[str] | None = None) -> int:
             summary = usage.read_summary(args.days, args.time_zone, {
                 "claude": True, "codex": True, "grok": True, "cursor": False,
             }, wait_for_rates=True)
+            from . import plan_limits
+
+            # Claude plan limits live where Claude Code runs; the controller keeps the newest.
+            summary["claudeLimits"] = plan_limits.read_claude_record()
             print(json.dumps({
                 "command": "usage", "machine_id": machine, "hostname": hostname,
                 "repo": str(repo), "exit_code": 0, "problems": 0,

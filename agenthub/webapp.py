@@ -329,7 +329,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(usage_fleet.read_summary(days=days, time_zone=time_zone))
 
     def get_usage_limits(self) -> None:
-        self.send_json(plan_limits.read_limits(usage.public_settings()))
+        try:
+            statusline = hub_config.load_settings(self.repo)["claude_statusline"]
+        except hub_config.ConfigError:
+            statusline = False
+        self.send_json(plan_limits.read_limits(usage.public_settings(), statusline=statusline))
 
     def get_usage_settings(self) -> None:
         self.send_json(usage.public_settings())
@@ -460,8 +464,10 @@ class Handler(BaseHTTPRequestHandler):
             )
         elif action == "agents":
             report = content.agent_settings(payload.get("enabled"), payload.get("mode"))
+        elif action == "claude-statusline":
+            report = content.claude_statusline(payload.get("enabled"))
         else:
-            raise ApiError(400, "action must be skill-targets or agents")
+            raise ApiError(400, "action must be skill-targets, agents or claude-statusline")
         self.send_json(report.to_dict())
 
     def put_file(self) -> None:

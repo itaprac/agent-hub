@@ -210,8 +210,8 @@ def load_settings(repo: Path) -> dict[str, Any]:
     path = repo / "hub.toml"
     data = load_toml(path, required=False)
     for key in data:
-        if key not in {"agents", "skills"}:
-            raise config_error(path, key, "unknown key; expected 'agents' or 'skills'")
+        if key not in {"agents", "skills", "usage"}:
+            raise config_error(path, key, "unknown key; expected 'agents', 'skills' or 'usage'")
     agent_data = data.get("agents", {})
     if not isinstance(agent_data, dict):
         raise config_error(path, "agents", "must be a table")
@@ -258,7 +258,18 @@ def load_settings(repo: Path) -> dict[str, Any]:
                 raise config_error(
                     path, f"{key}.{field}", f"unknown Agent '{min(unknown)}'"
                 )
-    return {"agents": agents, "enabled": enabled, "mode": mode, "skills": skills}
+    usage = data.get("usage", {})
+    if not isinstance(usage, dict):
+        raise config_error(path, "usage", "must be a table")
+    for field, value in usage.items():
+        if field != "claude_statusline":
+            raise config_error(path, f"usage.{field}", "unknown key; expected 'claude_statusline'")
+        if not isinstance(value, bool):
+            raise config_error(path, f"usage.{field}", "must be true or false")
+    return {
+        "agents": agents, "enabled": enabled, "mode": mode, "skills": skills,
+        "claude_statusline": usage.get("claude_statusline", False),
+    }
 
 
 def _skill_is_selected(

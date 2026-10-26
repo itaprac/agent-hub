@@ -148,6 +148,18 @@ def _set_agents_text(text: str, enabled: list[str] | None, mode: str) -> str:
     return "\n".join(result) + "\n"
 
 
+def _set_usage_text(text: str, enabled: bool) -> str:
+    lines = text.splitlines()
+    found = next(((start, end) for path, start, end in _sections(lines) if path == ("usage",)), None)
+    key = f"claude_statusline = {'true' if enabled else 'false'}"
+    if found is None:
+        before = _trim_blank_end(lines)
+        return "\n".join(before + ([""] if before else []) + ["[usage]", key]) + "\n"
+    start, end = found
+    body = [line for line in lines[start + 1:end] if not _key_line(line, {"claude_statusline"})]
+    return "\n".join(lines[: start + 1] + [key] + body + lines[end:]) + "\n"
+
+
 # ------------------------------------------------------------------ operations
 
 
@@ -283,3 +295,20 @@ def machines(repo: Path, machine_id: str) -> list[dict[str, Any]]:
     except Exception:  # remote configuration is optional here
         pass
     return [{"machine": name, "agents": agents, "local": name == machine_id} for name, agents in sorted(known.items())]
+
+
+def set_claude_statusline(projection: config.MachineProjection, enabled: Any) -> lifecycle.LifecycleReport:
+    """Turn the Claude Code status line that records plan limits on or off."""
+    if not isinstance(enabled, bool):
+        raise HubConfigError(400, "enabled must be true or false")
+
+    def edit_data(data: dict[str, Any]) -> None:
+        data.setdefault("usage", {})["claude_statusline"] = enabled
+
+    return _change(
+        projection,
+        "claude status line",
+        lambda text: _set_usage_text(text, enabled),
+        edit_data,
+        f"Claude Code plan limits status line {'on' if enabled else 'off'}",
+    )

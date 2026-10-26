@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import io
 import json
 import os
@@ -11,7 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from agenthub import cli, plan_limits
+from agenthub import cli, config, operations, plan_limits, remote, usage, usage_fleet
+from conftest import HUB_TOML, write
+
+SAME_ORIGIN = {"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin"}
 
 FAKE_CODEX = """#!{python}
 import json
@@ -120,9 +124,10 @@ def test_silent_codex_times_out(home: Path, tmp_path: Path, monkeypatch: pytest.
 
 def test_claude_needs_the_status_line_until_it_reports(home: Path) -> None:
     [plan] = plan_limits.read_limits({"claude": True, "codex": False})["plans"]
-
     assert plan["status"] == "setup"
-    assert "agent-hub statusline" in plan["message"]
+
+    [plan] = plan_limits.read_limits({"claude": True, "codex": False}, statusline=True)["plans"]
+    assert plan["status"] == "waiting"
 
 
 def test_statusline_records_claude_limits(
@@ -138,7 +143,7 @@ def test_statusline_records_claude_limits(
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
 
     assert cli.main(["statusline"]) == 0
-    assert capsys.readouterr().out == "5h 24% · 7d 41%\n"
+    assert capsys.readouterr().out == "5h 76% left · 7d 59% left\n"
     stored = home / ".config" / "agent-hub" / "claude-limits.json"
     assert stored.stat().st_mode & 0o777 == 0o600
 
@@ -171,3 +176,93 @@ def test_limits_endpoint_follows_usage_sources(server: str, home: Path, fake_cod
 
     assert [plan["provider"] for plan in payload["plans"]] == ["codex"]
     assert payload["plans"][0]["plan"] == "prolite"
+
+
+def claude_store(content: Path) -> Path:
+    write(content / "hub.toml", HUB_TOML.replace('enabled = ["claude"]', 'enabled = ["claude-code"]'))
+    return content
+
+
+def test_turning_on_the_status_line_applies_it_and_keeps_other_settings(
+    server: str, content: Path, home: Path
+) -> None:
+    claude_store(content)
+    settings = home / ".claude" / "settings.json"
+    settings.write_text(json.dumps({"model": "opus"}), encoding="utf-8")
+    assert plan_limits.statusline_checks(config.load_machine_projection(content)) == []
+
+    request = urllib.request.Request(
+        f"{server}/api/config", method="POST", headers=SAME_ORIGIN,
+        data=json.dumps({"action": "claude-statusline", "enabled": True}).encode(),
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        report = json.loads(response.read())
+
+    assert report["exit_code"] == 0
+    assert "[usage]\nclaude_statusline = true\n" in (content / "hub.toml").read_text()
+    data = json.loads(settings.read_text(encoding="utf-8"))
+    assert data["model"] == "opus"
+    assert data["statusLine"]["type"] == "command"
+    assert data["statusLine"]["command"].endswith(" statusline")
+    [check] = plan_limits.statusline_checks(config.load_machine_projection(content))
+    assert check.level == "ok"
+    with urllib.request.urlopen(f"{server}/api/usage/limits", timeout=20) as response:
+        plans = json.loads(response.read())["plans"]
+    assert plans[0] == {**plans[0], "provider": "claude", "status": "waiting"}
+
+
+def test_status_reports_a_missing_status_line_and_never_replaces_another(content: Path, home: Path) -> None:
+    claude_store(content)
+    (content / "hub.toml").write_text(
+        (content / "hub.toml").read_text() + "\n[usage]\nclaude_statusline = true\n", encoding="utf-8"
+    )
+    projection = config.load_machine_projection(content)
+    [check] = plan_limits.statusline_checks(projection)
+    assert check.level == "MISSING"
+
+    settings = home / ".claude" / "settings.json"
+    own = {"statusLine": {"type": "command", "command": "~/bin/my-agent-hub statusline"}}
+    settings.write_text(json.dumps(own), encoding="utf-8")
+    # Another status line is a warning, so Apply and Sync still succeed.
+    report = operations.ContentOperations(content).apply()
+    assert report.exit_code == 0
+    assert [check.level for check in report.checks if check.kind == "statusline"] == ["warn"]
+    assert json.loads(settings.read_text(encoding="utf-8")) == own
+
+    settings.write_text("{not json", encoding="utf-8")
+    [check] = plan_limits.statusline_checks(projection, apply=True)
+    assert check.level == "DRIFT"
+
+
+def test_usage_brings_the_newest_claude_limits_from_other_machines(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usage_fleet._CACHE.clear()
+    local = {
+        "days": 30, "timeZone": "UTC", "sinceDay": "2026-10-01", "untilDay": "2026-10-26",
+        "resolution": "day", "readAt": "2026-10-26T10:00:00Z", "buckets": [], "sources": [],
+        "rollups": usage._build_rollups([], [], "day"),
+    }
+    monkeypatch.setattr(usage, "load_settings", lambda: {"claude": True, "codex": True, "grok": False, "cursor": False})
+    monkeypatch.setattr(usage, "read_summary", lambda *_args: copy.deepcopy(local))
+    targets = {name: remote.RemoteTarget(f"test@{name}", "/bin/agent-hub", "/store") for name in ("old", "new", "bad")}
+    monkeypatch.setattr(remote, "load_remotes", lambda: targets)
+    limits = {"five_hour": {"used_percentage": 10, "resets_at": 1_800_000_000}}
+    targets["empty"] = targets["infinite"] = targets["bad"]
+    records = {
+        "old": {"capturedAt": 1, "rateLimits": limits},
+        "new": {"capturedAt": 2, "rateLimits": limits},
+        "bad": {"capturedAt": "3", "rateLimits": limits},
+        # Newer, but with nothing usable: never shown over a real reading.
+        "empty": {"capturedAt": 4, "rateLimits": {}},
+        "infinite": {"capturedAt": 5, "rateLimits": {"five_hour": {"used_percentage": float("inf")}}},
+    }
+    monkeypatch.setattr(
+        remote, "read_usage",
+        lambda machine, *_args: {**copy.deepcopy(local), "claudeLimits": records[machine]},
+    )
+
+    result = usage_fleet.read_summary(30, "UTC")
+
+    assert result["claudeLimits"]["machine"] == "new"
+    assert result["claudeLimits"]["windows"][0]["usedPercent"] == 10.0
