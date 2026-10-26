@@ -584,7 +584,8 @@ function planCard(plan, now) {
     else if (plan.credits?.hasCredits) body.push(el("div", { class: "plan-extra" }, [el("span", { text: `Credits: ${plan.credits.balance}` })]));
     if (plan.provider === "claude" && plan.capturedAt) {
       const where = plan.machine ? ` on ${plan.machine}` : "";
-      body.push(el("p", { class: "plan-note", text: `Read from Claude Code's status line${where} ${formatSpan(now - plan.capturedAt)} ago` }));
+      const from = plan.source === "t3" ? "T3 Code" : "Claude Code's status line";
+      body.push(el("p", { class: "plan-note", text: `Read from ${from}${where} ${formatSpan(now - plan.capturedAt)} ago` }));
     }
   } else if (plan.status === "setup") {
     body.push(
