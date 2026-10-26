@@ -71,6 +71,8 @@ The Console edits Skills, instructions, overlays, and `hub.toml`. It shows insta
 
 For Sync and Apply on another Machine from this Console, see [remote control](docs/remote-control.md).
 
+Usage also shows plan limits: how much of each window is used, when it resets, and Codex's free rate limit resets. Codex reports them through `codex app-server`. Claude Code reports them only to its status line, so set `"statusLine": {"type": "command", "command": "agent-hub statusline"}` in `~/.claude/settings.json`. agent-hub never reads either tool's credentials.
+
 ## Development
 
 Run `python3 -m pip install -e '.[dev]'`, then `python3 -m pytest`, `node tests/web_state.mjs`, `node tests/web_theme.mjs`, `./tests/smoke.sh`, and `./tests/web_smoke.sh`. Tests use temporary Stores and HOME directories.
