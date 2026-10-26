@@ -71,7 +71,7 @@ The Console edits Skills, instructions, overlays, and `hub.toml`. It shows insta
 
 For Sync and Apply on another Machine from this Console, see [remote control](docs/remote-control.md).
 
-Usage also shows plan limits: how much of each window is used, when it resets, and Codex's free rate limit resets. Codex reports them through `codex app-server`. Claude Code reports them only to its status line, so set `"statusLine": {"type": "command", "command": "agent-hub statusline"}` in `~/.claude/settings.json`. agent-hub never reads either tool's credentials.
+Usage also shows plan limits: how much of each window is used, when it resets, and Codex's free rate limit resets. Codex reports them through `codex app-server`. Claude Code reports them only to its status line: **Turn on** in Usage sets `[usage] claude_statusline = true` in `hub.toml`, and Apply then points Claude Code's status line at `agent-hub statusline` on every Machine. Usage shows the newest copy from any configured Machine. agent-hub never reads either tool's credentials.
 
 ## Development
 

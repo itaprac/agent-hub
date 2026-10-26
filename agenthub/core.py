@@ -482,8 +482,10 @@ def apply_report(projection: MachineProjection, dry_run: bool = False) -> ApplyR
             checks.append(apply_copy(item, dry_run))
     for instruction in projection.instruction_targets:
         checks.append(apply_instruction(instruction, dry_run))
+    from .plan_limits import statusline_checks
     from .projects import apply_links
 
+    checks.extend(statusline_checks(projection, apply=True, dry_run=dry_run))
     checks.extend(apply_links(projection, dry_run=dry_run))
     problems = sum(1 for check in checks if check.level in PROBLEM_LEVELS)
     return ApplyReport(
@@ -667,8 +669,10 @@ def status_report(projection: MachineProjection) -> StatusReport:
     checks.extend(disabled_copy_checks(projection))
     checks.extend(check_skill(item) for item in projection.skill_targets)
     checks.extend(check_instruction(item) for item in projection.instruction_targets)
+    from .plan_limits import statusline_checks
     from .projects import check_links
 
+    checks.extend(statusline_checks(projection))
     checks.extend(check_links(projection))
     checks.extend(check_git(projection.repo))
     problems = sum(1 for check in checks if check.level in PROBLEM_LEVELS)

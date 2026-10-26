@@ -3,7 +3,7 @@
 
 import { api } from "./api.js";
 import { MARK, PROVIDER_LABEL } from "./brands.js";
-import { $, clear, el } from "./dom.js";
+import { $, clear, el, formatTime, toast } from "./dom.js";
 import { store, update } from "./store.js";
 
 const WINDOWS = [
@@ -508,7 +508,6 @@ const PLAN_LABEL = {
   free: "Free", go: "Go", plus: "Plus", pro: "Pro", prolite: "Pro Lite",
   team: "Team", business: "Business", enterprise: "Enterprise", edu: "Edu",
 };
-const LIMITS_SETUP = '"statusLine": {\n  "type": "command",\n  "command": "agent-hub statusline"\n}';
 
 function planLabel(plan) {
   if (!plan) return "";
@@ -541,10 +540,12 @@ function formatMoment(ms, now) {
   return new Intl.DateTimeFormat("en-US", options).format(new Date(ms));
 }
 
+// Bars show what is left in each window, so they shrink as the plan is used.
 function limitRow(window, plan, now) {
   const elapsed = Boolean(window.resetsAt) && window.resetsAt <= now;
-  const used = elapsed ? 0 : Math.max(0, Math.min(100, num(window.usedPercent)));
-  const level = elapsed ? "" : used >= 100 || (plan.limitReached && used >= 95) ? " t-bad" : used >= 80 ? " t-warn" : "";
+  const used = Math.max(0, Math.min(100, num(window.usedPercent)));
+  const left = elapsed ? 100 : 100 - used;
+  const level = elapsed ? "" : left <= 0 || (plan.limitReached && left <= 5) ? " t-bad" : left <= 20 ? " t-warn" : "";
   const name = windowName(window);
   let foot;
   if (elapsed) foot = `Reset ${formatMoment(window.resetsAt, now)} · new window not read yet`;
@@ -553,12 +554,12 @@ function limitRow(window, plan, now) {
   return el("div", { class: `limit${level}` }, [
     el("div", { class: "limit-head" }, [
       el("span", { text: name }),
-      el("b", { text: elapsed ? "Reset" : `${trim(used)}% used` }),
+      el("b", { text: elapsed ? "Reset" : `${trim(left)}% left` }),
     ]),
     el("div", {
-      class: "meter", role: "meter", "aria-label": `${name} limit`,
-      "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(used)),
-    }, [el("i", { style: { width: `${used}%` } })]),
+      class: "meter", role: "meter", "aria-label": `${name} limit left`,
+      "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(left)),
+    }, [el("i", { style: { width: `${left}%` } })]),
     el("div", { class: "limit-foot", text: foot }),
   ]);
 }
@@ -582,13 +583,16 @@ function planCard(plan, now) {
     if (plan.credits?.unlimited) body.push(el("div", { class: "plan-extra" }, [el("span", { text: "Unlimited credits" })]));
     else if (plan.credits?.hasCredits) body.push(el("div", { class: "plan-extra" }, [el("span", { text: `Credits: ${plan.credits.balance}` })]));
     if (plan.provider === "claude" && plan.capturedAt) {
-      body.push(el("p", { class: "plan-note", text: `Read from Claude Code's status line ${formatSpan(now - plan.capturedAt)} ago` }));
+      const where = plan.machine ? ` on ${plan.machine}` : "";
+      body.push(el("p", { class: "plan-note", text: `Read from Claude Code's status line${where} ${formatSpan(now - plan.capturedAt)} ago` }));
     }
   } else if (plan.status === "setup") {
     body.push(
-      el("p", { class: "plan-note", text: "Claude Code reports plan limits only to its status line. Add this to ~/.claude/settings.json, then send one message:" }),
-      el("code", { class: "plan-code mono", text: LIMITS_SETUP }),
+      el("p", { class: "plan-note", text: "Claude Code reports plan limits only to its status line. agent-hub can add its status line on every Machine; an existing status line is left unchanged." }),
+      el("div", {}, [el("button", { class: "btn btn-ghost", type: "button", text: "Turn on", dataset: { claudeStatusline: "on" } })]),
     );
+  } else if (plan.status === "waiting") {
+    body.push(el("p", { class: "plan-note", text: plan.message }));
   } else {
     body.push(el("div", { class: "warnline" }, [
       el("span", { html: '<svg class="i" aria-hidden="true"><use href="#i-alert"/></svg>' }),
@@ -612,7 +616,12 @@ function limitsSection(snapshot) {
   else if (!limits.plans?.length) content = el("p", { class: "empty-line", text: "Turn on Claude Code or Codex in Settings to see plan limits." });
   else {
     const now = Date.now();
-    content = el("div", { class: "plans" }, limits.plans.map((plan) => planCard(plan, now)));
+    // Claude limits are recorded where Claude Code runs; Usage brings the newest remote copy.
+    const remote = snapshot.usage?.claudeLimits;
+    const plans = limits.plans.map((plan) => (
+      plan.provider === "claude" && remote && (plan.status !== "ok" || remote.capturedAt > plan.capturedAt) ? remote : plan
+    ));
+    content = el("div", { class: "plans" }, plans.map((plan) => planCard(plan, now)));
   }
   return el("section", { class: "sec" }, [
     el("div", { class: "sec-head" }, [el("h2", { text: "Plan limits" }), el("p", { text: "This account, any machine" })]),
@@ -874,10 +883,30 @@ export function isUsageLoading() {
   return controller.view().loading;
 }
 
+async function turnOnClaudeStatusline(button) {
+  button.disabled = true;
+  try {
+    const result = await api.claudeStatusline(true);
+    update({ log: { ...result, at: formatTime() } });
+    if (result.exit_code === 0) toast("Status line on. Other Machines get it with their next Sync.", "ok", 5000);
+    else toast("Status line is on, but Apply reported problems. Open the Log.", "err", 8000);
+  } catch (error) {
+    toast(`Turn on failed: ${error.message}`, "err", 8000);
+  } finally {
+    button.disabled = false;
+  }
+  await refreshLimits();
+}
+
 export function mountUsage() {
   const root = $("#usage-root");
   if (!root) return;
   root.addEventListener("click", (event) => {
+    const statuslineBtn = event.target.closest("[data-claude-statusline]");
+    if (statuslineBtn) {
+      turnOnClaudeStatusline(statuslineBtn);
+      return;
+    }
     const daysBtn = event.target.closest("[data-usage-days]");
     if (daysBtn) {
       const days = Number(daysBtn.dataset.usageDays);

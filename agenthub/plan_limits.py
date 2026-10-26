@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import queue
+import shlex
 import shutil
 import subprocess
 import threading
@@ -26,9 +28,10 @@ CACHE_TTL_S = 60
 CODEX_TIMEOUT_S = 15
 CLAUDE_WINDOWS = {"five_hour": 300, "seven_day": 10080}
 STATUSLINE_COMMAND = "agent-hub statusline"
-CLAUDE_SETUP = (
-    'Set "statusLine": {"type": "command", "command": "agent-hub statusline"} '
-    "in ~/.claude/settings.json, then send one message in Claude Code."
+CLAUDE_SETUP = "Turn on the Claude Code status line to record plan limits."
+CLAUDE_WAITING = (
+    "The status line is on. Limits appear after the next Claude Code message; "
+    "other Machines get the status line with their next Sync."
 )
 
 _LOCK = threading.Lock()
@@ -44,7 +47,7 @@ def _claude_path() -> Path:
 
 
 def _number(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         return None
     return float(value)
 
@@ -90,22 +93,25 @@ def statusline_text(record: dict[str, Any] | None) -> str:
         window = limits.get(key)
         used = _number(window.get("used_percentage")) if isinstance(window, dict) else None
         if used is not None:
-            parts.append(f"{label} {used:.0f}%")
+            parts.append(f"{label} {max(0.0, 100 - used):.0f}% left")
     return " · ".join(parts)
 
 
-def _claude_plan() -> dict[str, Any]:
-    plan: dict[str, Any] = {"provider": "claude", "windows": []}
-    path = _claude_path()
+def read_claude_record() -> dict[str, Any] | None:
+    """The stored status line record, as sent to a controller; None if absent or unreadable."""
     try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {**plan, "status": "setup", "message": CLAUDE_SETUP}
-    except (OSError, ValueError) as exc:
-        return {**plan, "status": "failed", "message": f"Cannot read {path}: {exc}"}
+        record = json.loads(_claude_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def claude_plan_from(record: Any) -> dict[str, Any] | None:
+    """Normalize a status line record from this or another Machine."""
     limits = record.get("rateLimits") if isinstance(record, dict) else None
-    if not isinstance(limits, dict):
-        return {**plan, "status": "failed", "message": f"{path} has no rate limits"}
+    captured = record.get("capturedAt") if isinstance(record, dict) else None
+    if not isinstance(limits, dict) or isinstance(captured, bool) or not isinstance(captured, int):
+        return None
     windows = []
     for key, minutes in CLAUDE_WINDOWS.items():
         window = limits.get(key)
@@ -118,11 +124,70 @@ def _claude_plan() -> dict[str, Any]:
             "id": key, "windowMinutes": minutes, "usedPercent": used,
             "resetsAt": _epoch_ms(window.get("resets_at")),
         })
-    captured = record.get("capturedAt")
-    return {
-        **plan, "status": "ok", "windows": windows,
-        "capturedAt": captured if isinstance(captured, int) else None,
-    }
+    if not windows:
+        return None
+    return {"provider": "claude", "status": "ok", "windows": windows, "capturedAt": captured}
+
+
+def _claude_plan(statusline: bool) -> dict[str, Any]:
+    plan = claude_plan_from(read_claude_record())
+    if plan is not None:
+        return plan
+    if statusline:
+        return {"provider": "claude", "status": "waiting", "windows": [], "message": CLAUDE_WAITING}
+    return {"provider": "claude", "status": "setup", "windows": [], "message": CLAUDE_SETUP}
+
+
+def newest_claude_plan(plans: list[dict[str, Any]]) -> dict[str, Any] | None:
+    ready = [plan for plan in plans if plan.get("status") == "ok"]
+    return max(ready, key=lambda plan: plan["capturedAt"]) if ready else None
+
+
+def _statusline_command() -> str:
+    found = shutil.which("agent-hub")
+    # Resolve symlinks so every caller on this Machine writes the same command.
+    return f"{shlex.quote(str(Path(found).resolve()))} statusline" if found else STATUSLINE_COMMAND
+
+
+def _ours(value: Any) -> bool:
+    command = value.get("command") if isinstance(value, dict) else None
+    try:
+        words = shlex.split(command) if isinstance(command, str) else []
+    except ValueError:
+        return False
+    return len(words) == 2 and Path(words[0]).name == "agent-hub" and words[1] == "statusline"
+
+
+def statusline_checks(projection: Any, *, apply: bool = False, dry_run: bool = False) -> list[Any]:
+    """Status or Apply of the Claude Code status line that records plan limits."""
+    from .core import StatusCheck
+
+    agent = next((item for item in projection.agents if item.name == "claude-code"), None)
+    if not projection.settings.get("claude_statusline") or agent is None or not agent.instructions_global:
+        return []
+    path = Path(agent.instructions_global).parent / "settings.json"
+    fields = {"kind": "statusline", "agent": agent.name, "name": "statusline", "target": str(path)}
+    label = f"{agent.name} plan limits status line: {path}"
+    command = _statusline_command()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError) as exc:
+        return [StatusCheck(level="DRIFT", text=f"{label} cannot be read: {exc}", **fields)]
+    if not isinstance(data, dict):
+        return [StatusCheck(level="DRIFT", text=f"{label} is not a JSON object", **fields)]
+    current = data.get("statusLine")
+    if isinstance(current, dict) and current.get("type") == "command" and current.get("command") == command:
+        return [StatusCheck(level="ok", text=label, **fields)]
+    if current is not None and not _ours(current):
+        # Never replace the operator's own status line.
+        return [StatusCheck(level="warn", text=f"{label} already runs another status line; leave it unchanged", **fields)]
+    if not apply:
+        return [StatusCheck(level="MISSING", text=label, **fields)]
+    if not dry_run:
+        data["statusLine"] = {**(current if isinstance(current, dict) else {}), "type": "command", "command": command}
+        mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+        fileio.atomic_write(path, (json.dumps(data, indent=2) + "\n").encode("utf-8"), mode)
+    return [StatusCheck(level="render", text=label, **fields)]
 
 
 # ------------------------------------------------------------------- Codex
@@ -284,11 +349,11 @@ def _cached(name: str, read: Any) -> dict[str, Any]:
         return copy.deepcopy(result)
 
 
-def read_limits(settings: dict[str, Any]) -> dict[str, Any]:
+def read_limits(settings: dict[str, Any], *, statusline: bool = False) -> dict[str, Any]:
     """Plan limits for the enabled Usage sources that report them."""
     plans = []
     if settings.get("claude", True):
-        plans.append(_claude_plan())
+        plans.append(_claude_plan(statusline))
     if settings.get("codex", True):
         plans.append(_cached("codex", _codex_plan))
     return {"readAt": _now_ms(), "plans": plans}

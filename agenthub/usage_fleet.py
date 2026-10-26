@@ -10,7 +10,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from . import config, remote, usage
+from . import config, plan_limits, remote, usage
 
 _CACHE: OrderedDict[tuple[Any, ...], tuple[float, dict[str, Any] | str]] = OrderedDict()
 _LOCK = threading.Lock()
@@ -84,6 +84,7 @@ def read_summary(days: int = 30, time_zone: str | None = None) -> dict[str, Any]
     except remote.RemoteError as exc:
         targets = {}
         merged["machines"].append({"id": "Remote configuration", "status": "failed", "message": str(exc)})
+    claude_plans = []
     enabled = {name for name in usage.SOURCE_FLAGS if usage._source_enabled(settings, name)} - {"cursor"}
     if targets:
         with ThreadPoolExecutor(max_workers=min(4, len(targets))) as pool:
@@ -95,6 +96,9 @@ def read_summary(days: int = 30, time_zone: str | None = None) -> dict[str, Any]
                     continue
                 buckets = [{**b, "machine": name} for b in result["buckets"] if b["provider"] in enabled]
                 sources = [{**s, "machine": name} for s in result["sources"] if s["provider"] in enabled]
+                plan = plan_limits.claude_plan_from(result.get("claudeLimits"))
+                if plan is not None and "claude" in enabled:
+                    claude_plans.append({**plan, "machine": name})
                 merged["buckets"].extend(buckets)
                 merged["sources"].extend(sources)
                 merged["machines"].append({
@@ -102,6 +106,7 @@ def read_summary(days: int = 30, time_zone: str | None = None) -> dict[str, Any]
                     "pricing": result.get("pricing"),
                 })
                 by_machine.append({"machine": name, **usage._build_rollups(buckets, sources, local["resolution"])["total"]})
+    merged["claudeLimits"] = plan_limits.newest_claude_plan(claude_plans)
     merged["partial"] = any(m["status"] != "ok" for m in merged["machines"])
     merged["rollups"] = usage._build_rollups(merged["buckets"], merged["sources"], local["resolution"])
     merged["rollups"]["byMachine"] = by_machine

@@ -248,6 +248,11 @@ class ContentOperations:
             projection = config.load_machine_projection(self.repo)
             return hubconfig.set_agents(projection, enabled, mode)
 
+    def claude_statusline(self, enabled: Any) -> lifecycle.LifecycleReport:
+        with _serialized():
+            projection = config.load_machine_projection(self.repo)
+            return hubconfig.set_claude_statusline(projection, enabled)
+
     def read_file(self, path: Any) -> dict[str, Any]:
         with _serialized():
             return files.read(self.repo, path)
