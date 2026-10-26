@@ -2,9 +2,8 @@
 // Usage page and painted with this console's tokens.
 
 import { api } from "./api.js";
-import { MARK, PROVIDER_LABEL, PROVIDER_ORDER } from "./brands.js";
-import { $, clear, el, placeIndicators } from "./dom.js";
-import { icon } from "./icons.js";
+import { MARK, PROVIDER_LABEL } from "./brands.js";
+import { $, clear, el } from "./dom.js";
 import { store, update } from "./store.js";
 
 const WINDOWS = [
@@ -91,6 +90,22 @@ const controller = createUsageController({
     paint(store);
   },
 });
+
+// Plan limits load beside the report: they do not depend on the period, and a
+// slow Codex answer must not hold back the chart.
+let limitsLoading = false;
+
+async function refreshLimits() {
+  if (limitsLoading) return;
+  limitsLoading = true;
+  try {
+    update({ usageLimits: await api.usageLimits(), usageLimitsError: null });
+  } catch (error) {
+    update({ usageLimitsError: error.message || "Plan limits request failed" });
+  } finally {
+    limitsLoading = false;
+  }
+}
 
 // ------------------------------------------------------------------ format
 
@@ -245,204 +260,179 @@ function svgEl(tag, attrs = {}) {
   return node;
 }
 
-// One chart at a time is on screen; redraw it when its width changes.
+function formatDayLong(day) {
+  const date = new Date(`${day}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return day || "";
+  return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }).format(date);
+}
+
+function swatch(provider) {
+  return el("i", { class: `sw s-${provider}`, "aria-hidden": "true" });
+}
+
+// Line chart drawn at the real pixel width, so text and markers keep their shape.
+// Hover or arrow keys move a crosshair with one dot per series and a tooltip.
 let chartObserver = null;
 
-function buildChart(periods, byPeriod, timeZone, resolution, providerOrder, metric) {
-  const order = (providerOrder || PROVIDER_ORDER).filter((provider) => PROVIDER_LABEL[provider]);
-  const format = metric === "tokens" ? formatTokens : formatUsd;
-  const labelPeriod = (period) => (resolution === "hour" ? formatHourShort(period, timeZone) : formatDayShort(period));
-  const wrap = el("div", { class: "usage-chart" });
-  const tooltip = el("div", { class: "usage-chart-tip", role: "presentation" });
-  const plot = el("div", {
-    class: "usage-chart-plot",
-    tabIndex: periods.length ? 0 : -1,
-    role: "img",
-    "aria-label": `${resolution === "hour" ? "Hourly" : "Daily"} ${metric === "tokens" ? "tokens" : "cost"} chart. Use the arrow keys to read each ${resolution === "hour" ? "hour" : "day"}.`,
+function drawChart(host, model) {
+  const width = Math.max(280, Math.round(host.clientWidth || 900));
+  const narrow = width < 560;
+  const height = narrow ? 220 : 280;
+  const left = 56;
+  const right = 10;
+  const top = 18;
+  const bottom = 30;
+  const { periods, series, format, label, longLabel } = model;
+  const count = periods.length;
+  clear(host);
+  const svg = svgEl("svg", {
+    class: "chart-svg", width, height, viewBox: `0 0 ${width} ${height}`, role: "img",
+    "aria-label": model.summary,
   });
-  const live = el("div", { class: "sr-only", role: "status", "aria-live": "polite" });
-  plot.append(tooltip);
-  wrap.append(plot, live);
+  const tip = el("div", { class: "tip", "aria-hidden": "true" });
+  host.append(svg, tip);
+  if (!count) return;
 
-  if (!periods.length) {
-    plot.append(el("div", { class: "usage-empty usage-chart-empty", text: "No activity in this window." }));
-    return wrap;
-  }
-
-  const columns = periods.map((period) => {
-    const entry = byPeriod.get(period);
-    const bands = order.map((provider) => {
-      const row = entry?.bySource?.[provider];
-      return { provider, value: metric === "tokens" ? row?.totalTokens || 0 : row?.costUsd || 0 };
-    });
-    return { bands, total: bands.reduce((sum, band) => sum + band.value, 0) };
-  });
-  const active = order.filter((provider, index) => columns.some((column) => column.bands[index].value > 0));
-  const peak = columns.reduce((max, column) => column.bands.reduce((inner, band) => Math.max(inner, band.value), max), 0);
+  const peak = series.reduce((max, row) => row.values.reduce((inner, value) => Math.max(inner, value), max), 0);
   const { max, ticks } = niceScale(peak, TICK_COUNT);
-  let hoverIndex = null;
-  let geometry = null;
+  const plotW = width - left - right;
+  const plotH = height - top - bottom;
+  const x = (index) => left + (count === 1 ? plotW / 2 : (index * plotW) / (count - 1));
+  const y = (value) => top + (max === 0 ? plotH : plotH * (1 - value / max));
 
-  function draw() {
-    const width = plot.clientWidth;
-    const height = plot.clientHeight;
-    if (!width || !height) return;
-    const left = 56;
-    const right = 10;
-    const top = 12;
-    const bottom = 28;
-    const innerWidth = Math.max(10, width - left - right);
-    const x = (index) => (periods.length === 1 ? left + innerWidth / 2 : left + (index * innerWidth) / (periods.length - 1));
-    const y = (value) => (max === 0 ? height - bottom : top + (height - top - bottom) * (1 - value / max));
-    const base = height - bottom;
-    geometry = { x, y, left, innerWidth, width, top, base };
+  const grid = svgEl("g", { class: "grid" });
+  const axis = svgEl("g", { class: "axis" });
+  for (const tick of ticks) {
+    grid.append(svgEl("line", { x1: left, x2: width - right, y1: y(tick).toFixed(1), y2: y(tick).toFixed(1), class: tick === 0 ? "base" : null }));
+    const text = svgEl("text", { x: left - 10, y: (y(tick) + 4).toFixed(1), "text-anchor": "end" });
+    text.textContent = tick === 0 ? "0" : (model.axisFormat || format)(tick);
+    axis.append(text);
+  }
+  const labelAt = narrow ? [0, Math.floor((count - 1) / 2), count - 1] : [0, 1, 2, 3, 4].map((part) => Math.round((part * (count - 1)) / 4));
+  for (const index of [...new Set(labelAt)]) {
+    const anchor = index === 0 ? "start" : index === count - 1 ? "end" : "middle";
+    const text = svgEl("text", { x: x(index).toFixed(1), y: height - 8, "text-anchor": count === 1 ? "middle" : anchor });
+    text.textContent = label(periods[index]);
+    axis.append(text);
+  }
+  svg.append(grid, axis);
 
-    plot.querySelector("svg")?.remove();
-    const svg = svgEl("svg", { width, height, class: "usage-chart-svg", "aria-hidden": "true" });
-    for (const tick of ticks) {
-      svg.append(svgEl("line", { x1: left, x2: width - right, y1: y(tick).toFixed(1), y2: y(tick).toFixed(1), class: "usage-grid" }));
-      const label = svgEl("text", { x: left - 10, y: (y(tick) + 4).toFixed(1), "text-anchor": "end", class: "usage-axis" });
-      label.textContent = tick === 0 ? (metric === "tokens" ? "0" : "$0")
-        : metric === "tokens" ? formatTokens(tick) : `$${tick >= 1 ? INTEGER.format(Math.round(tick)) : tick.toFixed(2)}`;
-      svg.append(label);
-    }
-    const labelCount = Math.min(periods.length, width < 480 ? 3 : 5);
-    const labelIndexes = new Set(Array.from({ length: labelCount }, (_, step) =>
-      labelCount === 1 ? 0 : Math.round((step * (periods.length - 1)) / (labelCount - 1))));
-    for (const index of labelIndexes) {
-      const text = svgEl("text", {
-        x: x(index).toFixed(1),
-        y: height - 8,
-        "text-anchor": index === 0 && periods.length > 1 ? "start" : index === periods.length - 1 && periods.length > 1 ? "end" : "middle",
-        class: "usage-axis",
-      });
-      text.textContent = labelPeriod(periods[index]);
-      svg.append(text);
-    }
-
-    const series = active.map((provider) => {
-      const bandIndex = order.indexOf(provider);
-      const points = columns.map((column, index) => ({ x: x(index), y: y(column.bands[bandIndex].value) }));
-      const line = points.length === 1
-        ? `M${left},${points[0].y.toFixed(2)} L${width - right},${points[0].y.toFixed(2)}`
-        : curvePath(points);
-      const total = columns.reduce((sum, column) => sum + column.bands[bandIndex].value, 0);
-      return { provider, line, total };
-    }).sort((a, b) => b.total - a.total);
-    const lastX = periods.length === 1 ? width - right : x(periods.length - 1);
-    const firstX = periods.length === 1 ? left : x(0);
-    for (const row of series) {
-      svg.append(svgEl("path", { d: `${row.line} L${lastX.toFixed(2)},${base} L${firstX.toFixed(2)},${base} Z`, class: `usage-area usage-area-${row.provider}` }));
-    }
-    for (const row of series) {
-      svg.append(svgEl("path", { d: row.line, class: `usage-line usage-line-${row.provider}` }));
-    }
-
-    // Label the busiest period so the scale reads at a glance.
-    const peakIndex = columns.reduce((best, column, index) => (column.total > columns[best].total ? index : best), 0);
-    if (columns[peakIndex].total > 0 && periods.length > 2) {
-      const peakY = Math.min(...columns[peakIndex].bands.map((band) => y(band.value)));
-      const nearRight = x(peakIndex) > width - 170;
-      const note = svgEl("text", {
-        x: (x(peakIndex) + (nearRight ? -10 : 10)).toFixed(1),
-        y: Math.max(top + 10, peakY + 4).toFixed(1),
-        "text-anchor": nearRight ? "end" : "start",
-        class: "usage-peak",
-      });
-      note.textContent = `${labelPeriod(periods[peakIndex])} · ${format(columns[peakIndex].total)}`;
-      svg.append(note);
-    }
-
-    const hover = svgEl("g", { class: "usage-hover-g" });
-    hover.append(svgEl("line", { y1: top, y2: base, class: "usage-hover" }));
-    for (const provider of active) hover.append(svgEl("circle", { r: 4.5, class: `usage-dot usage-dot-${provider}`, "data-provider": provider }));
-    svg.append(hover);
-    plot.prepend(svg);
-    showHover(hoverIndex);
+  const drawn = [...series].sort((a, b) => b.total - a.total);
+  for (const row of drawn) {
+    const points = row.values.map((value, index) => ({ x: x(index), y: y(value) }));
+    const line = count === 1 ? `M${left},${points[0].y} L${width - right},${points[0].y}` : curvePath(points);
+    svg.append(svgEl("path", { d: `${line} L${x(count - 1)},${y(0)} L${x(0)},${y(0)} Z`, class: `area s-${row.provider}` }));
+  }
+  for (const row of drawn) {
+    const points = row.values.map((value, index) => ({ x: x(index), y: y(value) }));
+    const line = count === 1 ? `M${left},${points[0].y} L${width - right},${points[0].y}` : curvePath(points);
+    svg.append(svgEl("path", { d: line, class: `line s-${row.provider}` }));
   }
 
-  function showHover(index) {
-    hoverIndex = index;
-    const svg = plot.querySelector("svg");
-    const group = svg?.querySelector(".usage-hover-g");
-    if (!group || !geometry) return;
-    if (index == null) {
-      group.classList.remove("on");
-      tooltip.classList.remove("on");
+  // Direct label on the busiest period.
+  const totals = periods.map((_, index) => series.reduce((sum, row) => sum + row.values[index], 0));
+  const peakIndex = totals.reduce((best, value, index) => (value > totals[best] ? index : best), 0);
+  if (totals[peakIndex] > 0 && series.length) {
+    const high = Math.max(...series.map((row) => row.values[peakIndex]));
+    const px = x(peakIndex);
+    const endSide = px > width - 200;
+    const text = svgEl("text", {
+      x: (px + (endSide ? -10 : 10)).toFixed(1), y: Math.max(12, y(high) - 2).toFixed(1),
+      "text-anchor": endSide ? "end" : "start", class: "peak",
+    });
+    text.textContent = `${format(totals[peakIndex])} · ${label(periods[peakIndex])}`;
+    svg.append(text);
+  }
+
+  const hover = svgEl("g", { class: "hover", visibility: "hidden" });
+  const cross = svgEl("line", { y1: top, y2: height - bottom, class: "cross" });
+  hover.append(cross);
+  const dots = drawn.map((row) => {
+    const dot = svgEl("circle", { r: 4.5, class: `pt s-${row.provider}` });
+    hover.append(dot);
+    return { row, dot };
+  });
+  svg.append(hover);
+  const hit = svgEl("rect", { x: left, y: 0, width: plotW, height, class: "hit" });
+  svg.append(hit);
+
+  let current = null;
+  const show = (index) => {
+    host.classList.toggle("hovering", index !== null);
+    if (index === null) {
+      current = null;
+      hover.setAttribute("visibility", "hidden");
+      tip.classList.remove("on");
       return;
     }
-    const { x, y, width } = geometry;
-    const column = columns[index];
-    const cx = x(index);
-    group.classList.add("on");
-    const line = group.querySelector("line");
-    line.setAttribute("x1", cx.toFixed(1));
-    line.setAttribute("x2", cx.toFixed(1));
-    for (const dot of group.querySelectorAll("circle")) {
-      const band = column.bands.find((item) => item.provider === dot.getAttribute("data-provider"));
-      dot.setAttribute("cx", cx.toFixed(1));
-      dot.setAttribute("cy", y(band?.value || 0).toFixed(1));
+    current = index;
+    const px = x(index);
+    hover.setAttribute("visibility", "visible");
+    cross.setAttribute("x1", px.toFixed(1));
+    cross.setAttribute("x2", px.toFixed(1));
+    for (const { row, dot } of dots) {
+      dot.setAttribute("cx", px.toFixed(1));
+      dot.setAttribute("cy", y(row.values[index]).toFixed(1));
     }
-    clear(tooltip);
-    tooltip.append(
-      el("div", { class: "usage-tip-when", text: labelPeriod(periods[index]) }),
-      ...order.map((provider) =>
-        el("div", { class: "usage-tip-row" }, [
-          el("span", { class: `usage-swatch sw-${provider}`, "aria-hidden": "true" }),
-          el("span", { class: "usage-tip-name", text: PROVIDER_LABEL[provider] }),
-          el("span", { class: "usage-tip-val", text: format(column.bands.find((band) => band.provider === provider)?.value || 0) }),
-        ]),
-      ),
-      el("div", { class: "usage-tip-row usage-tip-total" }, [
-        el("span", { class: "usage-tip-name", text: "Total" }),
-        el("span", { class: "usage-tip-val", text: format(column.total) }),
-      ]),
+    clear(tip);
+    tip.append(
+      el("div", { class: "d", text: longLabel(periods[index]) }),
+      ...series.map((row) => el("div", { class: "r" }, [swatch(row.provider), el("span", { text: row.label }), el("b", { text: format(row.values[index]) })])),
+      el("div", { class: "r t" }, [el("span", { text: "Total" }), el("b", { text: format(totals[index]) })]),
     );
-    tooltip.classList.add("on");
-    const tipWidth = tooltip.offsetWidth || 190;
-    const leftPos = cx + 16 + tipWidth > width ? cx - 16 - tipWidth : cx + 16;
-    tooltip.style.transform = `translate(${Math.max(0, leftPos).toFixed(0)}px, 0)`;
-  }
-
-  const indexAt = (clientX) => {
-    if (!geometry) return null;
-    const bounds = plot.getBoundingClientRect();
-    const fraction = (clientX - bounds.left - geometry.left) / geometry.innerWidth;
-    return Math.min(periods.length - 1, Math.max(0, Math.round(fraction * (periods.length - 1))));
+    tip.classList.add("on");
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    const leftPos = px + 16 + tw > width ? px - tw - 16 : px + 16;
+    const high = Math.max(0, ...series.map((row) => row.values[index]));
+    tip.style.left = `${Math.max(0, leftPos)}px`;
+    tip.style.top = `${Math.max(0, Math.min(y(high) - 24, height - bottom - th))}px`;
   };
-  plot.addEventListener("pointermove", (event) => showHover(indexAt(event.clientX)));
-  plot.addEventListener("pointerleave", () => showHover(null));
-  plot.addEventListener("blur", () => showHover(null));
-  plot.addEventListener("keydown", (event) => {
-    const step = { ArrowLeft: -1, ArrowRight: 1, Home: -Infinity, End: Infinity }[event.key];
-    if (step === undefined) return;
-    event.preventDefault();
-    const current = hoverIndex ?? (step > 0 ? -1 : periods.length);
-    const next = Math.min(periods.length - 1, Math.max(0, current + step));
-    showHover(next);
-    const column = columns[next];
-    live.textContent = `${labelPeriod(periods[next])}: ${order.map((provider) =>
-      `${PROVIDER_LABEL[provider]} ${format(column.bands.find((band) => band.provider === provider)?.value || 0)}`).join(", ")}; total ${format(column.total)}`;
+  const indexAt = (clientX) => {
+    const box = svg.getBoundingClientRect();
+    const scale = box.width ? width / box.width : 1;
+    const px = (clientX - box.left) * scale;
+    return count === 1 ? 0 : Math.max(0, Math.min(count - 1, Math.round(((px - left) / plotW) * (count - 1))));
+  };
+  hit.addEventListener("pointermove", (event) => show(indexAt(event.clientX)));
+  hit.addEventListener("pointerdown", (event) => show(indexAt(event.clientX)));
+  hit.addEventListener("pointerleave", (event) => {
+    if (event.pointerType === "mouse") show(null);
   });
+  host.onkeydown = (event) => {
+    const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      show(event.key === "Home" ? 0 : count - 1);
+    } else if (step) {
+      event.preventDefault();
+      show(Math.max(0, Math.min(count - 1, (current ?? (step > 0 ? -1 : count)) + step)));
+    } else if (event.key === "Escape" && current !== null) {
+      event.stopPropagation();
+      show(null);
+    }
+  };
+  host.onblur = () => show(null);
+}
 
-  chartObserver?.disconnect();
-  if (typeof ResizeObserver === "function") {
-    let lastWidth = 0;
-    chartObserver = new ResizeObserver(() => {
-      if (plot.clientWidth === lastWidth) return;
-      lastWidth = plot.clientWidth;
-      draw();
-    });
-    chartObserver.observe(plot);
-  } else {
-    requestAnimationFrame(draw);
-  }
-  return wrap;
+function mountChart(host, model) {
+  drawChart(host, model);
+  if (chartObserver) chartObserver.disconnect();
+  if (typeof ResizeObserver !== "function") return;
+  let lastWidth = host.clientWidth;
+  let frame = 0;
+  chartObserver = new ResizeObserver(() => {
+    if (!host.isConnected || host.clientWidth === lastWidth || !host.clientWidth) return;
+    lastWidth = host.clientWidth;
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => drawChart(host, model));
+  });
+  chartObserver.observe(host);
 }
 
 // ------------------------------------------------------------------ render
 
-function segmented(options, current, attr, small = false) {
+function segmented(options, current, attr) {
   const labels = {
     usageDays: "Usage period",
     usageMetric: "Usage metric",
@@ -450,27 +440,23 @@ function segmented(options, current, attr, small = false) {
   };
   return el(
     "div",
-    { class: `segmented${small ? " segmented-sm" : ""}`, role: "group", "aria-label": labels[attr] || "Options" },
-    [
-      el("span", { class: "seg-ind", "aria-hidden": "true" }),
-      ...options.map((option) =>
-        el("button", {
-          class: `seg${option.value === current ? " active" : ""}`,
-          type: "button",
-          text: option.label,
-          "aria-pressed": String(option.value === current),
-          dataset: { [attr]: String(option.value) },
-        }),
-      ),
-    ],
+    { class: "seg", role: "group", "aria-label": labels[attr] || "Options" },
+    options.map((option) =>
+      el("button", {
+        type: "button",
+        text: option.label,
+        "aria-pressed": String(option.value === current),
+        dataset: { [attr]: String(option.value) },
+      }),
+    ),
   );
 }
 
-function metricCard(label, value, detail) {
-  return el("div", { class: "card usage-metric" }, [
-    el("div", { class: "usage-metric-label", text: label }),
-    el("div", { class: "usage-metric-value", text: value }),
-    el("div", { class: "usage-metric-detail", text: detail }),
+function kpi(label, value, detail) {
+  return el("div", {}, [
+    el("small", { text: label }),
+    el("b", { text: value }),
+    el("span", { text: detail }),
   ]);
 }
 
@@ -481,40 +467,156 @@ function windowLabel(summary) {
   return `${formatDayShort(summary.sinceDay)} – ${formatDayShort(summary.untilDay)}`;
 }
 
-function bar(share, extra = "") {
-  const fill = el("i", { class: `usage-bar-fill${extra ? ` ${extra}` : ""}` });
-  fill.style.width = `${Math.max(share * 100, share > 0 ? 1.5 : 0).toFixed(2)}%`;
-  return el("span", { class: "usage-bar-track", "aria-hidden": "true" }, [fill]);
-}
-
-// "$1,234.56" with quieter currency sign and cents.
-function amount(text) {
-  const match = /^(\D*)([\d,]+)(\.\d+)?(\D*)$/.exec(text);
-  if (!match) return [text];
+// Plan limits sit between the figure and the chart, as on the loaded page.
+function skeleton(limits) {
   return [
-    match[1] ? el("span", { class: "q", text: match[1] }) : null,
-    match[2],
-    match[3] ? el("span", { class: "q", text: match[3] }) : null,
-    match[4] ? el("sup", { text: match[4] }) : null,
-  ].filter(Boolean);
+    el("div", { class: "usage-skel", role: "status", "aria-label": "Loading usage data" }, [
+      el("div", { class: "skel skel-big" }),
+      el("div", { class: "skel skel-line" }),
+    ]),
+    limits,
+    el("div", { class: "usage-skel", "aria-hidden": "true" }, [
+      el("div", { class: "skel skel-chart" }),
+      el("p", { class: "foot-note", text: "Reading usage from configured machines…" }),
+    ]),
+  ];
 }
 
-function skeleton() {
-  return el("div", { class: "usage-skel", role: "status", "aria-label": "Loading usage data" }, [
-    el("div", { class: "usage-top" }, [
-      el("div", { class: "card usage-hero" }, [
-        el("div", { class: "usage-kicker", text: "Raw token cost" }),
-        el("div", { class: "usage-skel-block usage-skel-lg" }),
-        el("div", { class: "usage-skel-block usage-skel-sm" }),
-        el("div", { class: "usage-skel-block usage-skel-row" }),
-      ]),
-      el("div", { class: "card usage-tools" }, [
-        el("div", { class: "usage-skel-block usage-skel-row" }),
-        el("div", { class: "usage-skel-block usage-skel-row" }),
-        el("div", { class: "usage-skel-block usage-skel-row" }),
-      ]),
+function sourcesSection(summary) {
+  const sources = (summary.sources || []).filter((source) => source.provider !== "hub");
+  if (!sources.length) return null;
+  return el("section", { class: "sec" }, [
+    el("div", { class: "sec-head" }, [el("h2", { text: "Sources" }), el("p", { text: `Scanned in ${formatCount(summary.scanDurationMs)} ms` })]),
+    el("div", { class: "group" }, sources.map((source) => {
+      const ok = source.status === "ok";
+      return el("div", { class: `item${ok ? "" : " t-warn"}` }, [
+        el("span", { class: `ic ${ok ? "neutral" : "t-warn"}`, html: `<svg class="i" aria-hidden="true"><use href="#i-${ok ? "check" : "alert"}"/></svg>` }),
+        el("span", { class: "item-main" }, [
+          el("span", { class: "item-name", text: `${PROVIDER_LABEL[source.provider] || source.provider}` }),
+          el("span", { class: "tag", text: source.machine || "" }),
+          el("span", { class: "path mono", text: source.path || "" }),
+        ]),
+        el("span", { class: `right${ok ? "" : " t-warn"}`, text: ok
+          ? `${formatCount(source.scannedFiles)} ${source.provider === "cursor" ? "account events" : "files"} · ${formatCount(source.sessions)} sessions`
+          : source.message || "Could not report usage" }),
+      ]);
+    })),
+  ]);
+}
+
+const PLAN_LABEL = {
+  free: "Free", go: "Go", plus: "Plus", pro: "Pro", prolite: "Pro Lite",
+  team: "Team", business: "Business", enterprise: "Enterprise", edu: "Edu",
+};
+const LIMITS_SETUP = '"statusLine": {\n  "type": "command",\n  "command": "agent-hub statusline"\n}';
+
+function planLabel(plan) {
+  if (!plan) return "";
+  return PLAN_LABEL[plan] || plan.charAt(0).toUpperCase() + plan.slice(1);
+}
+
+function windowName(window) {
+  const minutes = window.windowMinutes;
+  const base = minutes === 300 ? "5-hour"
+    : minutes === 1440 ? "Daily"
+    : minutes === 10080 ? "Weekly"
+    : minutes ? (minutes % 1440 === 0 ? `${minutes / 1440}-day` : `${trim(minutes / 60)}-hour`)
+    : "Limit";
+  return window.limit ? `${window.limit} · ${base}` : base;
+}
+
+function formatSpan(ms) {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes % 60}m`;
+  return `${minutes}m`;
+}
+
+function formatMoment(ms, now) {
+  const options = ms - now < 6 * 86_400_000
+    ? { weekday: "short", hour: "numeric", minute: "2-digit" }
+    : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+  return new Intl.DateTimeFormat("en-US", options).format(new Date(ms));
+}
+
+function limitRow(window, plan, now) {
+  const elapsed = Boolean(window.resetsAt) && window.resetsAt <= now;
+  const used = elapsed ? 0 : Math.max(0, Math.min(100, num(window.usedPercent)));
+  const level = elapsed ? "" : used >= 100 || (plan.limitReached && used >= 95) ? " t-bad" : used >= 80 ? " t-warn" : "";
+  const name = windowName(window);
+  let foot;
+  if (elapsed) foot = `Reset ${formatMoment(window.resetsAt, now)} · new window not read yet`;
+  else if (window.resetsAt) foot = `Resets in ${formatSpan(window.resetsAt - now)} · ${formatMoment(window.resetsAt, now)}`;
+  else foot = "Reset time not reported";
+  return el("div", { class: `limit${level}` }, [
+    el("div", { class: "limit-head" }, [
+      el("span", { text: name }),
+      el("b", { text: elapsed ? "Reset" : `${trim(used)}% used` }),
     ]),
-    el("p", { class: "usage-scan", text: "Reading usage from configured machines…" }),
+    el("div", {
+      class: "meter", role: "meter", "aria-label": `${name} limit`,
+      "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(used)),
+    }, [el("i", { style: { width: `${used}%` } })]),
+    el("div", { class: "limit-foot", text: foot }),
+  ]);
+}
+
+function planCard(plan, now) {
+  const label = PROVIDER_LABEL[plan.provider] || plan.provider;
+  const body = [];
+  if (plan.status === "ok") {
+    for (const window of plan.windows || []) body.push(limitRow(window, plan, now));
+    if (!plan.windows?.length) body.push(el("p", { class: "empty-line", text: "No limit windows reported." }));
+    const resets = (plan.resets || []).filter((item) => !item.expiresAt || item.expiresAt > now);
+    if (resets.length) {
+      const next = resets[0];
+      body.push(el("div", { class: "plan-extra" }, [
+        el("b", { text: `${resets.length} free reset${resets.length === 1 ? "" : "s"} available` }),
+        el("span", { text: `${next.expiresAt ? `Next expires ${formatMoment(next.expiresAt, now)} · ` : ""}Redeem in Codex: /usage → Redeem reset` }),
+      ]));
+    } else if (plan.provider === "codex") {
+      body.push(el("div", { class: "plan-extra" }, [el("span", { text: "No free resets available" })]));
+    }
+    if (plan.credits?.unlimited) body.push(el("div", { class: "plan-extra" }, [el("span", { text: "Unlimited credits" })]));
+    else if (plan.credits?.hasCredits) body.push(el("div", { class: "plan-extra" }, [el("span", { text: `Credits: ${plan.credits.balance}` })]));
+    if (plan.provider === "claude" && plan.capturedAt) {
+      body.push(el("p", { class: "plan-note", text: `Read from Claude Code's status line ${formatSpan(now - plan.capturedAt)} ago` }));
+    }
+  } else if (plan.status === "setup") {
+    body.push(
+      el("p", { class: "plan-note", text: "Claude Code reports plan limits only to its status line. Add this to ~/.claude/settings.json, then send one message:" }),
+      el("code", { class: "plan-code mono", text: LIMITS_SETUP }),
+    );
+  } else {
+    body.push(el("div", { class: "warnline" }, [
+      el("span", { html: '<svg class="i" aria-hidden="true"><use href="#i-alert"/></svg>' }),
+      el("span", { text: plan.message || "Could not read plan limits" }),
+    ]));
+  }
+  return el("div", { class: "plan" }, [
+    el("div", { class: "plan-head" }, [
+      el("b", {}, [swatch(plan.provider), label]),
+      plan.plan ? el("span", { class: "tag", text: planLabel(plan.plan) }) : null,
+    ]),
+    ...body,
+  ]);
+}
+
+function limitsSection(snapshot) {
+  const limits = snapshot.usageLimits;
+  let content;
+  if (snapshot.usageLimitsError) content = el("div", { class: "usage-error", role: "alert", text: snapshot.usageLimitsError });
+  else if (!limits) content = el("div", { class: "skel skel-line", role: "status", "aria-label": "Loading plan limits" });
+  else if (!limits.plans?.length) content = el("p", { class: "empty-line", text: "Turn on Claude Code or Codex in Settings to see plan limits." });
+  else {
+    const now = Date.now();
+    content = el("div", { class: "plans" }, limits.plans.map((plan) => planCard(plan, now)));
+  }
+  return el("section", { class: "sec" }, [
+    el("div", { class: "sec-head" }, [el("h2", { text: "Plan limits" }), el("p", { text: "This account, any machine" })]),
+    content,
   ]);
 }
 
@@ -526,6 +628,8 @@ function paint(snapshot) {
     snapshot.tab,
     snapshot.usage,
     snapshot.usageSettings,
+    snapshot.usageLimits,
+    snapshot.usageLimitsError,
     view,
   ];
   if (painted && painted.every((item, index) => item === key[index])) return;
@@ -537,7 +641,6 @@ function paint(snapshot) {
   try {
     paintUsagePage(root, snapshot, view);
     painted = key;
-    requestAnimationFrame(() => placeIndicators(root));
   } catch (error) {
     painted = null;
     clear(root);
@@ -552,47 +655,39 @@ function paintUsagePage(root, snapshot, view) {
   const summary = snapshot.usage;
   const hourly = summary?.resolution === "hour";
   const { breakdown, days, error, loading, metric } = view;
+  const costMetric = metric === "cost";
 
-  root.append(el("div", { class: "usage-head" }, [
-    el("div", { class: "usage-head-copy" }, [
-      el("h1", { class: "title", text: "Usage" }),
-      el("p", {
-        class: "usage-range",
-        text: summary ? `${windowLabel(summary)} · all configured machines` : "Usage across configured machines",
-      }),
+  root.append(el("div", { class: "hero hero-top" }, [
+    el("div", { class: "hero-copy" }, [
+      el("p", { class: "eyebrow", text: "Usage" }),
+      el("h1", { text: costMetric ? "Raw token cost" : "Processed tokens" }),
+      el("p", { class: "lede", text: summary ? `${windowLabel(summary)} · Configured machines` : "Usage across configured machines" }),
     ]),
-    el("div", { class: "usage-head-actions" }, [
-      segmented(WINDOWS.map((item) => ({ value: item.days, label: item.label })), days, "usageDays"),
-    ]),
+    segmented(WINDOWS.map((item) => ({ value: item.days, label: item.label })), days, "usageDays"),
   ]));
 
   if (error) {
-    root.append(el("div", { class: "usage-error", role: "alert", text: error }));
+    root.append(el("div", { class: "usage-error", role: "alert", text: error }), limitsSection(snapshot));
     return;
   }
   if (loading || !summary) {
-    root.append(skeleton());
+    root.append(...skeleton(limitsSection(snapshot)));
     return;
   }
 
+  const notices = [];
   for (const machine of summary.machines || []) {
-    if (machine.status !== "ok") {
-      root.append(el("div", { class: "usage-error", role: "status", text: `${machine.id} is not included. ${machine.message || "Could not read usage."} The totals below are partial.` }));
-    }
-    if (machine.status === "ok" && machine.pricing?.status === "unavailable") {
-      root.append(el("div", { class: "usage-error", role: "status", text: `${machine.id}: model prices are unavailable. Its token counts are included, but its estimated cost is incomplete.` }));
-    }
+    if (machine.status !== "ok") notices.push(`${machine.id} is not included. ${machine.message || "Could not read usage."} The totals below are partial.`);
+    if (machine.status === "ok" && machine.pricing?.status === "unavailable") notices.push(`${machine.id}: model prices are unavailable. Its token counts are included, but its estimated cost is incomplete.`);
   }
+  for (const text of notices) root.append(el("div", { class: "usage-error", role: "status", text }));
 
   const report = summary.rollups;
   const merged = report.total;
   const sources = report.bySource;
   const models = report.byModel;
-  const machineRows = report.byMachine || [];
   const periods = new Map(report.periods.map((period) => [period.key, period]));
   const sourceOrder = sources.map((row) => row.source);
-  const cost = metric === "cost";
-  const orderedSources = [...sources].sort((a, b) => (cost ? b.costUsd - a.costUsd : b.totalTokens - a.totalTokens));
   const periodKeys =
     hourly && summary.sinceTime && summary.untilTime
       ? enumerateHourStarts(summary.sinceTime, summary.untilTime)
@@ -601,199 +696,169 @@ function paintUsagePage(root, snapshot, view) {
   const periodAverage = activePeriods === 0 ? 0 : merged.totalTokens / activePeriods;
   const observedInput = merged.uncachedInputTokens + merged.cachedInputTokens;
   const cachedShare = observedInput === 0 ? 0 : merged.cachedInputTokens / observedInput;
-  const recent = [...periodKeys].reverse().slice(0, 8);
-  const sourceProblems = (provider) => (summary.sources || []).filter(
-    (source) => source.provider === provider && source.status !== "ok");
+  const recent = [...periodKeys].reverse().slice(0, hourly ? 24 : 14);
+  const format = costMetric ? formatUsd : formatTokens;
+  const valueOf = (row) => (costMetric ? row?.costUsd || 0 : row?.totalTokens || 0);
 
-  // ---- hero: total and machines | tools
-  const machineTotal = machineRows.reduce((sum, row) => sum + (cost ? row.costUsd : row.totalTokens), 0);
-  const hero = el("div", { class: "card usage-hero" }, [
-    el("div", {}, [
-      el("div", { class: "usage-kicker", text: cost ? "Raw token cost" : "Processed tokens" }),
-      el("div", { class: "usage-hero-value" }, cost ? amount(`${formatUsd(merged.costUsd)}*`) : [formatTokens(merged.totalTokens)]),
-      el("div", {
-        class: "usage-hero-note",
-        text: cost
-          ? "* API cost estimate. This is not your subscription bill."
-          : `Input, cache reads and output across ${formatCount(merged.sessions)} sessions.`,
-      }),
+  // Hero figure.
+  root.append(
+    el("div", { class: "bignum", text: costMetric ? formatUsd(merged.costUsd) : formatTokens(merged.totalTokens) }, [
+      costMetric ? el("sup", { text: "*", "aria-hidden": "true" }) : null,
     ]),
-    machineRows.length ? el("div", { class: "usage-machines" }, [
-      el("div", { class: "usage-kicker", text: "By machine" }),
-      ...machineRows.map((row) => {
-        const value = cost ? row.costUsd : row.totalTokens;
-        return el("div", { class: "usage-machine" }, [
-          el("span", { class: "usage-machine-name", text: row.machine }),
-          bar(machineTotal ? value / machineTotal : 0, "is-neutral"),
-          el("span", { class: "usage-machine-val" }, [
-            el("b", { text: cost ? formatUsd(row.costUsd) : formatTokens(row.totalTokens) }),
-            el("small", { text: `${cost ? `${formatTokens(row.totalTokens)} tokens` : formatUsd(row.costUsd)} · ${formatCount(row.sessions)} sessions` }),
-          ]),
-        ]);
-      }),
-    ]) : null,
-  ]);
+    el("p", {
+      class: "foot-note",
+      text: costMetric
+        ? "* API cost estimate. This is not your subscription bill."
+        : `Input, cache reads and output across ${formatCount(merged.sessions)} sessions.`,
+    }),
+  );
+  const machineRows = report.byMachine || [];
+  if (machineRows.length) {
+    root.append(el("div", { class: "bymachine" }, machineRows.map((row) => el("div", {}, [
+      el("b", { text: format(valueOf(row)) }),
+      `${row.machine} · ${costMetric ? `${formatTokens(row.totalTokens)} tokens` : formatUsd(row.costUsd)} · ${formatCount(row.sessions)} sessions`,
+    ]))));
+  }
 
-  const tools = el("div", { class: "card usage-tools" }, orderedSources.length
-    ? orderedSources.map((row) => {
-      const share = cost ? row.costShare : row.tokenShare;
-      const problems = sourceProblems(row.source);
-      const used = row.totalTokens > 0 || row.costUsd > 0;
-      return el("div", { class: `usage-tool${used ? "" : " is-idle"}` }, [
-        el("span", { class: `usage-tool-ico usage-mark usage-mark-${row.source}`, html: MARK[row.source] || "" }),
-        el("div", { class: "usage-tool-copy" }, [
-          el("div", { class: "usage-tool-name" }, [
-            PROVIDER_LABEL[row.source] || row.source,
-            problems.length ? el("span", { class: "tag tag-warn", text: "Partial" }) : null,
-          ]),
-          used
-            ? el("div", {
-              class: "usage-tool-sub",
-              text: cost
-                ? `${formatPercent(share)} of cost · ${formatTokens(row.totalTokens)} tokens`
-                : `${formatPercent(share)} of tokens · ${formatUsd(row.costUsd)}`,
-            })
-            : el("div", { class: "usage-tool-sub", text: "No usage in this period" }),
-          used ? bar(share, `sw-${row.source}`) : null,
-          ...problems.map((source) => el("div", { class: "usage-tool-warn" }, [
-            el("span", { "aria-hidden": "true", html: icon("warn") }),
-            `${source.message || "Could not report usage"} on ${source.machine}`,
-          ])),
-        ]),
-        el("span", { class: "usage-tool-val", text: cost ? formatUsd(row.costUsd) : formatTokens(row.totalTokens) }),
-      ]);
-    })
-    : [el("div", { class: "usage-empty", text: "No activity in this window." })]);
-  root.append(el("div", { class: "usage-top" }, [hero, tools]));
+  root.append(limitsSection(snapshot));
 
-  // ---- KPIs
+  // Chart.
+  const series = sourceOrder
+    .map((provider) => ({
+      provider,
+      label: PROVIDER_LABEL[provider] || provider,
+      values: periodKeys.map((keyName) => valueOf(periods.get(keyName)?.bySource?.[provider])),
+    }))
+    .map((row) => ({ ...row, total: row.values.reduce((sum, value) => sum + value, 0) }))
+    .filter((row) => row.total > 0);
+  const labelPeriod = (period) => (hourly ? formatHourShort(period, summary.timeZone) : formatDayShort(period));
+  const longPeriod = (period) => (hourly ? formatDateTimeShort(period, summary.timeZone) : formatDayLong(period));
+  const chartHost = el("div", {
+    class: "chart", tabIndex: 0,
+    "aria-label": `${hourly ? "Hourly" : "Daily"} ${costMetric ? "cost" : "tokens"} chart. Use the arrow keys to read each ${hourly ? "hour" : "day"}.`,
+  });
+  root.append(el("section", { class: "sec chart-sec" }, [
+    el("div", { class: "sec-head" }, [
+      el("h2", { text: `${hourly ? "Hourly" : "Daily"} ${costMetric ? "cost" : "tokens"}` }),
+      el("div", { class: "legend" }, series.map((row) => el("span", {}, [swatch(row.provider), row.label]))),
+      segmented([{ value: "cost", label: "Cost" }, { value: "tokens", label: "Tokens" }], metric, "usageMetric"),
+    ]),
+    chartHost,
+  ]));
+  const model = {
+    periods: periodKeys, series, format, label: labelPeriod, longLabel: longPeriod,
+    axisFormat: costMetric ? (value) => (value >= 1000 ? `$${trim(value / 1000)}k` : `$${trim(value)}`) : formatTokens,
+    summary: `${hourly ? "Hourly" : "Daily"} ${costMetric ? "cost" : "tokens"} for ${series.map((row) => row.label).join(" and ") || "no tools"}, ${windowLabel(summary)}.`,
+  };
+  requestAnimationFrame(() => {
+    if (chartHost.isConnected) mountChart(chartHost, model);
+  });
+
+  // Tool shares.
+  const shareOf = (row) => (costMetric ? row.costShare : row.tokenShare) || 0;
+  const ordered = [...sources].sort((a, b) => valueOf(b) - valueOf(a));
+  const failures = new Map();
+  for (const source of summary.sources || []) {
+    if (source.status === "failed") failures.set(source.provider, source.message || "Could not report usage");
+  }
+  root.append(el("section", { class: "sec" }, [
+    el("div", { class: "sec-head" }, [el("h2", { text: "By tool" }), el("p", { text: `Share of ${costMetric ? "cost" : "tokens"}` })]),
+    el("div", { class: "stack", role: "img", "aria-label": ordered.map((row) => `${PROVIDER_LABEL[row.source] || row.source} ${formatPercent(shareOf(row))}`).join(", ") },
+      ordered.filter((row) => shareOf(row) > 0).map((row) => el("i", { class: `s-${row.source}`, style: { width: `${shareOf(row) * 100}%` } }))),
+    ordered.length
+      ? el("div", { class: "tools" }, ordered.map((row) => el("div", {}, [
+        el("b", {}, [swatch(row.source), PROVIDER_LABEL[row.source] || row.source]),
+        el("div", { class: "v", text: format(valueOf(row)) }),
+        el("span", { text: `${formatPercent(shareOf(row))} · ${costMetric ? `${formatTokens(row.totalTokens)} tokens` : formatUsd(row.costUsd)}` }),
+        failures.has(row.source) ? el("div", { class: "warnline" }, [
+          el("span", { html: '<svg class="i" aria-hidden="true"><use href="#i-alert"/></svg>' }),
+          el("span", { text: failures.get(row.source) }),
+        ]) : null,
+      ])))
+      : el("p", { class: "empty-line", text: "No activity in this window." }),
+  ]));
+
+  // KPIs.
   const savingsDetail =
     merged.costUsd > 0 && merged.cacheSavingsUsd > merged.costUsd
       ? `${(merged.cacheSavingsUsd / merged.costUsd).toFixed(1)}× the raw token cost`
       : "vs full input rates";
-  root.append(
-    el("div", { class: "usage-metrics" }, [
-      metricCard(
-        "Processed tokens",
-        formatTokens(merged.totalTokens),
-        `${formatCount(merged.sessions)} sessions · ${formatTokens(periodAverage)}/${hourly ? "hour" : "day"}`,
-      ),
-      metricCard("Cached input", formatTokens(merged.cachedInputTokens), `${formatPercent(cachedShare)} of observed input`),
-      metricCard("Uncached input", formatTokens(merged.uncachedInputTokens), `${formatTokens(merged.cacheCreationTokens)} cache writes`),
-      metricCard("Output", formatTokens(merged.outputTokens), `${formatTokens(merged.reasoningTokens)} reasoning`),
-      metricCard("Cache savings", formatUsd(merged.cacheSavingsUsd), savingsDetail),
-    ]),
-  );
+  root.append(el("section", { class: "sec" }, [el("div", { class: "kpis" }, [
+    kpi("Processed tokens", formatTokens(merged.totalTokens), `${formatCount(merged.sessions)} sessions · ${formatTokens(periodAverage)}/${hourly ? "hour" : "day"}`),
+    kpi("Cached input", formatTokens(merged.cachedInputTokens), `${formatPercent(cachedShare)} of observed input`),
+    kpi("Uncached input", formatTokens(merged.uncachedInputTokens), `${formatTokens(merged.cacheCreationTokens)} cache writes`),
+    kpi("Output", formatTokens(merged.outputTokens), `${formatTokens(merged.reasoningTokens)} reasoning`),
+    kpi("Cache savings", formatUsd(merged.cacheSavingsUsd), savingsDetail),
+  ])]));
 
-  // ---- chart
-  root.append(
-    el("section", { class: "card usage-chart-card" }, [
-      el("div", { class: "usage-chart-head" }, [
-        el("h2", { class: "usage-card-title", text: `${hourly ? "Hourly" : "Daily"} ${metric === "tokens" ? "tokens" : "cost"}` }),
-        el("div", { class: "usage-legend" }, sourceOrder.filter((source) => PROVIDER_LABEL[source]).map((source) =>
-          el("span", { class: "usage-legend-item" }, [
-            el("span", { class: `usage-swatch sw-${source}`, "aria-hidden": "true" }),
-            el("span", { text: PROVIDER_LABEL[source] }),
-          ]))),
-        segmented([{ value: "cost", label: "Cost" }, { value: "tokens", label: "Tokens" }], metric, "usageMetric", true),
-      ]),
-      buildChart(periodKeys, periods, summary.timeZone, summary.resolution, sourceOrder, metric),
-    ]),
-  );
-
-  // ---- breakdown
-  const tableHead = el("div", { class: "sec-head" }, [
-    el("h2", { class: "sec-title", text: "Breakdown" }),
-    el("span", { class: "sec-sub", text: breakdown === "model" ? `${models.length} model${models.length === 1 ? "" : "s"}` : `last ${recent.length} ${hourly ? "hours" : "days"}` }),
-    el("span", { class: "spacer" }),
-    segmented([{ value: "model", label: "By model" }, { value: "time", label: hourly ? "By hour" : "By day" }], breakdown, "usageBreakdown", true),
-  ]);
-
+  // Breakdown.
   let table;
   if (breakdown === "model") {
-    const topShare = models.reduce((best, row) => Math.max(best, row.costShare || 0), 0) || 1;
+    const top = Math.max(0, ...models.map((row) => row.costShare || 0));
     table = el("table", { class: "usage-table" }, [
-      el("thead", {}, [
-        el("tr", {}, [
-          el("th", { text: "Model" }),
-          el("th", { class: "hide-sm", text: "Tool" }),
-          el("th", { class: "num", text: "Cost" }),
-          el("th", { text: "Share" }),
-          el("th", { class: "num", text: "Tokens" }),
-        ]),
-      ]),
-      el(
-        "tbody",
-        {},
-        models.length
-          ? models.map((row) =>
-            el("tr", {}, [
-              el("td", {}, [
-                el("div", { class: "usage-model" }, [
-                  el("span", { class: `usage-swatch sw-${row.source}`, "aria-hidden": "true" }),
-                  el("span", { class: "mono", text: row.model }),
-                ]),
-              ]),
-              el("td", { class: "hide-sm usage-dim", text: PROVIDER_LABEL[row.source] || row.source }),
-              el("td", { class: "num", text: formatUsd(row.costUsd) }),
-              el("td", {}, [el("div", { class: "usage-share" }, [bar((row.costShare || 0) / topShare, `sw-${row.source}`), el("span", { class: "num", text: formatPercent(row.costShare) })])]),
-              el("td", { class: "num usage-dim", text: formatTokens(row.totalTokens) }),
-            ]),
-          )
-          : [el("tr", {}, [el("td", { colSpan: 5, class: "usage-empty", text: "No activity in this window." })])],
-      ),
+      el("thead", {}, [el("tr", {}, [
+        el("th", { scope: "col", text: "Model" }),
+        el("th", { scope: "col", class: "n", text: "Cost" }),
+        el("th", { scope: "col", class: "n", text: "Share" }),
+        el("th", { scope: "col", class: "n col-tok", text: "Tokens" }),
+      ])]),
+      el("tbody", {}, models.length
+        ? models.map((row) => el("tr", {}, [
+          el("td", {}, [el("span", { class: "usage-model" }, [
+            el("span", { class: `usage-mark usage-mark-${row.source}`, html: MARK[row.source] || "" }),
+            el("span", { class: "mono", text: row.model }),
+          ])]),
+          el("td", { class: "n", text: formatUsd(row.costUsd) }),
+          el("td", { class: "n" }, [
+            el("span", { class: "sharebar", "aria-hidden": "true" }, [el("i", { style: { width: `${top ? ((row.costShare || 0) / top) * 100 : 0}%` } })]),
+            formatPercent(row.costShare),
+          ]),
+          el("td", { class: "n col-tok", text: formatTokens(row.totalTokens) }),
+        ]))
+        : [el("tr", {}, [el("td", { colSpan: 4, class: "usage-empty", text: "No activity in this window." })])]),
     ]);
   } else {
     table = el("table", { class: "usage-table" }, [
-      el("thead", {}, [
-        el("tr", {}, [
-          el("th", { text: hourly ? "Hour" : "Day" }),
-          ...sourceOrder.map((source) => el("th", { class: "num", text: PROVIDER_LABEL[source] || source })),
-          el("th", { class: "num", text: "Total" }),
-          el("th", { class: "num", text: "Tokens" }),
-        ]),
-      ]),
-      el(
-        "tbody",
-        {},
-        recent.length
-          ? recent.map((keyName) => {
-            const period = periods.get(keyName);
-            return el("tr", {}, [
-              el("td", { text: hourly ? formatHourShort(keyName, summary.timeZone) : formatDayShort(keyName) }),
-              ...sourceOrder.map((source) =>
-                el("td", { class: "num usage-dim", text: formatUsd(period?.bySource?.[source]?.costUsd || 0) }),
-              ),
-              el("td", { class: "num", text: formatUsd(period?.costUsd || 0) }),
-              el("td", { class: "num usage-dim", text: formatTokens(period?.totalTokens || 0) }),
-            ]);
-          })
-          : [el("tr", {}, [el("td", { colSpan: 3 + sourceOrder.length, class: "usage-empty", text: "No activity in this window." })])],
-      ),
+      el("thead", {}, [el("tr", {}, [
+        el("th", { scope: "col", text: hourly ? "Hour" : "Day" }),
+        ...sourceOrder.map((source) => el("th", { scope: "col", class: "n col-src", text: PROVIDER_LABEL[source] || source })),
+        el("th", { scope: "col", class: "n", text: "Total" }),
+        el("th", { scope: "col", class: "n col-tok", text: "Tokens" }),
+      ])]),
+      el("tbody", {}, recent.length
+        ? recent.map((keyName) => {
+          const period = periods.get(keyName);
+          return el("tr", {}, [
+            el("td", { text: hourly ? formatHourShort(keyName, summary.timeZone) : formatDayLong(keyName) }),
+            ...sourceOrder.map((source) => el("td", { class: "n col-src", text: formatUsd(period?.bySource?.[source]?.costUsd || 0) })),
+            el("td", { class: "n", text: formatUsd(period?.costUsd || 0) }),
+            el("td", { class: "n col-tok", text: formatTokens(period?.totalTokens || 0) }),
+          ]);
+        })
+        : [el("tr", {}, [el("td", { colSpan: 3 + sourceOrder.length, class: "usage-empty", text: "No activity in this window." })])]),
     ]);
   }
-  root.append(el("section", { class: "sec" }, [tableHead, el("div", { class: "card usage-table-card" }, [table])]));
+  root.append(el("section", { class: "sec" }, [
+    el("div", { class: "sec-head" }, [
+      el("h2", { text: "Breakdown" }),
+      el("p", { text: breakdown === "model" ? `${models.length} model${models.length === 1 ? "" : "s"}` : `Last ${recent.length} ${hourly ? "hours" : "days"}` }),
+      segmented([{ value: "model", label: "By model" }, { value: "time", label: hourly ? "By hour" : "By day" }], breakdown, "usageBreakdown"),
+    ]),
+    el("div", { class: "table-wrap" }, [table]),
+  ]));
+
+  const sourcesBlock = sourcesSection(summary);
+  if (sourcesBlock) root.append(sourcesBlock);
 
   const notes = [];
-  const unpricedTokens = models.reduce(
-    (sum, row) => (row.unpricedRecords ? sum + row.totalTokens : sum),
-    0,
-  );
-  if (unpricedTokens > 0) {
-    notes.push(`${formatTokens(unpricedTokens)} tokens had no published API rate and were left unpriced.`);
-  }
-  if (summary.pricing?.status && summary.pricing.status !== "ok" && summary.pricing.status !== "fresh" && summary.pricing.status !== "cached") {
-    notes.push(`Model rates: ${summary.pricing.status}.`);
-  }
+  const unpricedTokens = models.reduce((sum, row) => (row.unpricedRecords ? sum + row.totalTokens : sum), 0);
+  if (unpricedTokens > 0) notes.push(`${formatTokens(unpricedTokens)} tokens had no published API rate and were left unpriced.`);
+  if (summary.pricing?.status && !["ok", "fresh", "cached"].includes(summary.pricing.status)) notes.push(`Model rates: ${summary.pricing.status}.`);
   for (const source of summary.sources || []) {
     const label = PROVIDER_LABEL[source.provider] || source.provider;
-    const where = source.machine ? `${source.machine} · ${label}` : label;
-    if (source.status === "failed") notes.push(`${where}: ${source.message || "could not report usage."}`);
-    else if (source.status === "missing") notes.push(`${where}: ${source.message || "no transcript directory."}`);
-    else if (source.provider !== "hub") notes.push(`${where}: ${formatCount(source.scannedFiles)} ${source.provider === "cursor" ? "account events" : "files"}, ${formatCount(source.sessions)} sessions.`);
+    if (source.status === "missing") notes.push(`${label}: ${source.message || "no transcript directory."}`);
   }
-  notes.push(`Scanned in ${formatCount(summary.scanDurationMs)} ms.`);
-  root.append(el("p", { class: "usage-foot", text: notes.join(" · ") }));
+  if (notes.length) root.append(el("p", { class: "usage-foot", text: notes.join(" · ") }));
 }
 
 export function renderUsage(snapshot) {
@@ -801,7 +866,8 @@ export function renderUsage(snapshot) {
 }
 
 export async function refreshUsage() {
-  return controller.refresh();
+  const [loaded] = await Promise.all([controller.refresh(), refreshLimits()]);
+  return loaded;
 }
 
 export function isUsageLoading() {

@@ -13,6 +13,8 @@ export const store = {
   tab: "status",
   filter: "all",
   usage: null, // last GET /api/usage payload
+  usageLimits: null, // last GET /api/usage/limits payload
+  usageLimitsError: null,
   usageSettings: null,
   busy: 0,
 };

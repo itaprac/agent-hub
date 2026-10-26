@@ -288,6 +288,10 @@ class Handler(BaseHTTPRequestHandler):
         if not path.startswith("/api/"):
             if method != "GET":
                 raise ApiError(405, f"{method} is not allowed on {path}")
+            if path in {"/editorial", "/editorial/"}:
+                # The Editorial layout moved to / when the Workbench was removed.
+                self.send_payload(308, b"", "text/plain; charset=utf-8", headers={"Location": "/"})
+                return
             self.serve_static(path)
             return
 

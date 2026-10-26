@@ -64,7 +64,7 @@ export function createLifecycle({ runHub, refresh }) {
     if (!found) return null;
     const { skill, project } = found;
     const off = Boolean(skill.disabled);
-    const scope = project ? `project ${project}` : "global";
+    const scope = project ? `project ${project.replace(/--/g, "/")}` : "global";
     const count = skill.files.length;
     return {
       label: skill.name,
