@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +35,13 @@ CLAUDE_WAITING = (
     "other Machines get the status line with their next Sync."
 )
 
+T3_TAIL_BYTES = 4 * 1024 * 1024
+T3_MAX_FILES = 8
+T3_MAX_AGE_S = 8 * 24 * 60 * 60
+
 _LOCK = threading.Lock()
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_T3_CACHE: dict[str, tuple[tuple[str, int, int], dict[str, Any] | None]] = {}
 
 
 def _now_ms() -> int:
@@ -97,13 +103,99 @@ def statusline_text(record: dict[str, Any] | None) -> str:
     return " · ".join(parts)
 
 
-def read_claude_record() -> dict[str, Any] | None:
-    """The stored status line record, as sent to a controller; None if absent or unreadable."""
+def _statusline_record() -> dict[str, Any] | None:
     try:
         record = json.loads(_claude_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return record if isinstance(record, dict) else None
+
+
+def _t3_logs() -> Path:
+    return Path.home() / ".t3" / "userdata" / "logs" / "provider"
+
+
+def _rate_limit_info(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        if value.get("type") == "rate_limit_event" and isinstance(value.get("rate_limit_info"), dict):
+            return value["rate_limit_info"]
+        children = list(value.values())
+    elif isinstance(value, list):
+        children = value
+    else:
+        return None
+    for child in children:
+        found = _rate_limit_info(child)
+        if found is not None:
+            return found
+    return None
+
+
+def _last_t3_rate_limit(path: Path) -> dict[str, Any] | None:
+    """The newest rate_limit_event that Claude Code sent to T3 Code in one log."""
+    with path.open("rb") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        handle.seek(max(0, size - T3_TAIL_BYTES))
+        tail = handle.read()
+    for line in reversed(tail.splitlines()):
+        if b'"rate_limit_event"' not in line or not line.startswith(b"[") or b"{" not in line:
+            continue
+        try:
+            stamp = datetime.fromisoformat(line[1:line.index(b"]")].decode().replace("Z", "+00:00"))
+            info = _rate_limit_info(json.loads(line[line.index(b"{"):]))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        windows = info.get("unifiedWindows") if info else None
+        if not isinstance(windows, dict):
+            continue
+        limits = {}
+        for key in CLAUDE_WINDOWS:
+            window = windows.get(key)
+            if not isinstance(window, dict):
+                continue
+            share = _number(window.get("utilization"))
+            if share is not None:
+                limits[key] = {"used_percentage": share * 100, "resets_at": window.get("resetsAt")}
+        if limits:
+            return {"capturedAt": int(stamp.timestamp() * 1000), "source": "t3", "rateLimits": limits}
+    return None
+
+
+def _t3_record() -> dict[str, Any] | None:
+    """Claude Code run by T3 Code has no status line, but logs the same limits."""
+    cutoff = time.time() - T3_MAX_AGE_S
+    try:
+        logs = [(path, path.stat()) for path in _t3_logs().glob("events.*.log")]
+    except OSError:
+        return None
+    logs = sorted((item for item in logs if item[1].st_mtime >= cutoff), key=lambda item: -item[1].st_mtime)
+    # Threads log in parallel, so a newer file need not hold the newest reading.
+    records = []
+    for path, stat in logs[:T3_MAX_FILES]:
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+        with _LOCK:
+            hit = _T3_CACHE.get(str(path))
+        if hit is not None and hit[0] == key:
+            record = hit[1]
+        else:
+            try:
+                record = _last_t3_rate_limit(path)
+            except OSError:
+                continue
+            with _LOCK:
+                _T3_CACHE[str(path)] = (key, record)
+        if record is not None:
+            records.append(record)
+    return copy.deepcopy(max(records, key=lambda record: record["capturedAt"])) if records else None
+
+
+def read_claude_record() -> dict[str, Any] | None:
+    """The newest Claude limits on this Machine, as sent to a controller; None if there are none."""
+    records = [
+        record for record in (_statusline_record(), _t3_record())
+        if record is not None and isinstance(record.get("capturedAt"), int)
+    ]
+    return max(records, key=lambda record: record["capturedAt"]) if records else None
 
 
 def claude_plan_from(record: Any) -> dict[str, Any] | None:
@@ -126,7 +218,8 @@ def claude_plan_from(record: Any) -> dict[str, Any] | None:
         })
     if not windows:
         return None
-    return {"provider": "claude", "status": "ok", "windows": windows, "capturedAt": captured}
+    source = "t3" if record.get("source") == "t3" else "statusline"
+    return {"provider": "claude", "status": "ok", "windows": windows, "capturedAt": captured, "source": source}
 
 
 def _claude_plan(statusline: bool) -> dict[str, Any]:
@@ -362,3 +455,4 @@ def read_limits(settings: dict[str, Any], *, statusline: bool = False) -> dict[s
 def clear_cache() -> None:
     with _LOCK:
         _CACHE.clear()
+        _T3_CACHE.clear()

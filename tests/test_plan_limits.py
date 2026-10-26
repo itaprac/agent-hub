@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -266,3 +267,68 @@ def test_usage_brings_the_newest_claude_limits_from_other_machines(
 
     assert result["claudeLimits"]["machine"] == "new"
     assert result["claudeLimits"]["windows"][0]["usedPercent"] == 10.0
+
+
+def t3_log(home: Path, name: str, lines: list[str]) -> Path:
+    path = home / ".t3" / "userdata" / "logs" / "provider" / f"events.{name}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def rate_limit_line(stamp: str, five: float, week: float) -> str:
+    event = {"event": {"payload": {"type": "rate_limit_event", "rate_limit_info": {
+        "status": "allowed", "unifiedWindows": {
+            "five_hour": {"utilization": five, "resetsAt": 1_800_000_000},
+            "seven_day": {"utilization": week, "resetsAt": 1_800_500_000},
+        },
+    }}}}
+    return f"[{stamp}] NTIVE: {json.dumps(event)}"
+
+
+def test_claude_limits_come_from_t3_code_without_any_setup(home: Path) -> None:
+    mention = json.dumps({"event": {"text": '"type":"rate_limit_event" in a tool result'}})
+    t3_log(home, "thread", [
+        rate_limit_line("2026-10-26T10:00:00.000Z", 0.10, 0.05),
+        rate_limit_line("2026-10-26T11:05:06.874Z", 0.29, 0.08),
+        f"[2026-10-26T11:06:00.000Z] NTIVE: {mention}",
+        "[2026-10-26T11:07:00.000Z] NTIVE: {broken",
+    ])
+
+    [plan] = plan_limits.read_limits({"claude": True, "codex": False})["plans"]
+
+    assert plan["status"] == "ok" and plan["source"] == "t3"
+    assert plan["capturedAt"] == 1_793_012_706_874
+    assert [(window["id"], round(window["usedPercent"], 6)) for window in plan["windows"]] == [
+        ("five_hour", 29.0), ("seven_day", 8.0),
+    ]
+
+
+def test_the_newer_of_t3_code_and_the_status_line_wins(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t3_log(home, "thread", [rate_limit_line("2000-01-01T00:00:00.000Z", 0.5, 0.5)])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
+        "rate_limits": {"five_hour": {"used_percentage": 12, "resets_at": 1_800_000_000}},
+    })))
+    assert cli.main(["statusline"]) == 0
+
+    # The status line reading is newer than the one in the T3 Code log.
+    [plan] = plan_limits.read_limits({"claude": True, "codex": False})["plans"]
+    assert plan["source"] == "statusline"
+
+    plan_limits.clear_cache()
+    t3_log(home, "thread", [rate_limit_line("2999-01-01T00:00:00.000Z", 0.5, 0.5)])
+    [plan] = plan_limits.read_limits({"claude": True, "codex": False})["plans"]
+    assert plan["source"] == "t3"
+
+
+def test_the_newest_t3_reading_wins_across_parallel_threads(home: Path) -> None:
+    newer = t3_log(home, "a", [rate_limit_line("2026-10-26T11:00:00.000Z", 0.4, 0.1)])
+    busy = t3_log(home, "b", [rate_limit_line("2026-10-26T10:00:00.000Z", 0.2, 0.1), "[2026-10-26T11:30:00.000Z] NTIVE: {}"])
+    os.utime(newer, (1_000, time.time() - 60))
+    os.utime(busy, (1_000, time.time()))
+
+    [plan] = plan_limits.read_limits({"claude": True, "codex": False})["plans"]
+
+    assert round(plan["windows"][0]["usedPercent"]) == 40
